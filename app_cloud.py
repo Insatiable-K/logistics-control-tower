@@ -1,0 +1,843 @@
+
+
+import streamlit as st
+import pandas as pd
+
+st.set_page_config(
+    page_title="Logistics Control Tower",
+    layout="wide"
+)
+from logic_cloud import (
+    load_bookings,
+    build_execution_master,
+    get_containers_on_water,
+    get_arriving_today,
+    get_current_week_arrivals,
+    get_next_7_days_arrivals,
+    get_location_reached,
+    get_location_next_7_days,
+    get_port_eta_doc_risk,
+    get_eta_performance,
+    get_pos_received_in_range,
+    get_pos_approved_in_range,
+    get_rollover_summary,
+    get_container_data_issues,
+    get_lfd_risk,
+)
+
+
+
+uploaded_file = st.sidebar.file_uploader(
+    "Upload dashboard_data.xlsx",
+    type=["xlsx"]
+)
+
+if uploaded_file is None:
+    st.info("Please upload dashboard_data.xlsx")
+    st.stop()
+
+xls = pd.ExcelFile(uploaded_file)
+
+bookings_raw = pd.read_excel(xls, "bookings")
+shipment_mapping_raw = pd.read_excel(xls, "shipment_mapping")
+open_po_raw = pd.read_excel(xls, "open_po")
+in_transit_raw = pd.read_excel(xls, "in_transit")
+inventory_raw = pd.read_excel(xls, "inventory_intransit")
+bookings = load_bookings(
+    bookings_raw,
+    shipment_mapping_raw
+)
+tab1, tab2 = st.tabs(["📦 Booking", "🚢 Container Movement"])
+
+with tab1:
+    
+    
+    # =============================================================================
+    # CONFIG
+    # =============================================================================
+    
+    st.title("📦 Booking Performance Dashboard")
+    
+
+    # =============================================================================
+    # CLEAN DATA
+    # =============================================================================
+    bookings.columns = bookings.columns.str.lower().str.strip()
+    
+    bookings["event_date"] = pd.to_datetime(bookings["event_date"], errors="coerce")
+    bookings["etd"] = pd.to_datetime(bookings["etd"], errors="coerce")
+    
+    # =============================================================================
+    # DEFINE TRUE BOOKING LOGIC (BUSINESS RULE)
+    # =============================================================================
+    bookings["is_booking"] = (
+        (bookings["event_status"] == "BOOKED") |
+        (
+            (bookings["event_status"] == "ROLLOVER") &
+            (bookings["etd"].notna())
+        )
+    )
+    
+    # =============================================================================
+    # SIDEBAR FILTERS (SAFE DATE HANDLING)
+    # =============================================================================
+    st.sidebar.header("🔍 Filters")
+    
+    date_range = st.sidebar.date_input(
+        "Select Booking Date Range",
+        value=(
+            pd.Timestamp.today() - pd.Timedelta(days=7),
+            pd.Timestamp.today()
+        ),
+        key="booking_date_range"
+    )
+    
+    # -----------------------------------------------------------------------------
+    # STRICT VALIDATION (RECOMMENDED)
+    # -----------------------------------------------------------------------------
+    if not (isinstance(date_range, tuple) and len(date_range) == 2):
+        st.warning("⚠️ Please select both start and end date")
+        st.stop()
+    
+    start_date, end_date = date_range
+    
+    start_date = pd.to_datetime(start_date)
+    end_date = pd.to_datetime(end_date)
+    # FIX END DATE INCLUSIVITY
+    end_date = end_date + pd.Timedelta(days=1)
+    
+    st.caption(
+        f"Showing data from {start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')}"
+    )
+    
+    # =============================================================================
+    # KPI CALCULATIONS
+    # =============================================================================
+    
+    # -----------------------------
+    # CLEAN BASE
+    # -----------------------------
+    df = bookings.copy()
+    df = df[df["po_number"].notna()].copy()
+    
+    df["event_date"] = pd.to_datetime(df["event_date"], errors="coerce")
+    
+    df["event_status"] = (
+        df["event_status"]
+        .astype(str)
+        .str.upper()
+        .str.strip()
+    )
+    
+
+    # =============================================================================
+    # KPI 1: BOOKINGS RECEIVED (FIRST OCCURRENCE)
+    # =============================================================================
+    
+    po_first = (
+        df.groupby("po_number", as_index=False)["event_date"]
+        .min()
+        .rename(columns={"event_date": "first_received_date"})
+    )
+    
+    po_in_range = po_first[
+        (po_first["first_received_date"] >= start_date) &
+        (po_first["first_received_date"] < end_date)
+    ]
+    
+    total_bookings = po_in_range["po_number"].nunique()
+    
+    # =============================================================================
+    # KPI 2: BOOKINGS APPROVED (EVENT-BASED)
+    # =============================================================================
+    
+    approved_events = df[
+        (df["event_status"] != "HOLD") &
+        (df["event_date"] >= start_date) &
+        (df["event_date"] < end_date)
+    ]
+    
+    total_approved = approved_events["po_number"].nunique()
+    
+    # =============================================================================
+    # KPI 3: CONTAINERS CREATED (FIRST BOOKING EVENT)
+    # =============================================================================
+    
+    is_booking = (
+        (df["event_status"] == "BOOKED") |
+        (df["event_status"] == "ROLLOVER")
+    )
+    
+    first_container = (
+        df[is_booking & df["container_id"].notna()]
+        .groupby("container_id", as_index=False)["event_date"]
+        .min()
+    )
+    
+    container_in_range = first_container[
+        (first_container["event_date"] >= start_date) &
+        (first_container["event_date"] < end_date)
+    ]
+    
+    total_containers = container_in_range["container_id"].nunique()
+    
+    # =============================================================================
+    # KPI 4: BACKLOG (APPROVED BUT NOT CONTAINERIZED)
+    # =============================================================================
+    
+    backlog = total_approved - total_containers
+    
+    # =============================================================================
+    # KPI 5: APPROVED POs WITHOUT CONTAINER (CURRENT STATE)
+    # =============================================================================
+    
+    approved_all = df[df["event_status"] != "HOLD"]
+    
+    latest_po_state = (
+        approved_all.sort_values("event_date")
+        .groupby("po_number", as_index=False)
+        .last()
+    )
+    
+    pos_without_container = latest_po_state[
+        latest_po_state["container_id"].isna()
+    ]
+    
+    missing_container_count = pos_without_container["po_number"].nunique()
+    
+    # =============================================================================
+    # KPI 6: CONTAINERS SAILING (ETD BASED)
+    # =============================================================================
+    
+    latest_etd_df = (
+        df[df["etd"].notna()]
+        .sort_values("event_date")
+        .groupby("container_id", as_index=False)
+        .last()
+    )
+    
+    etd_filtered = latest_etd_df[
+        (latest_etd_df["etd"] >= start_date) &
+        (latest_etd_df["etd"] < end_date)
+    ]
+    
+    containers_sailing_in_range = etd_filtered["container_id"].nunique()
+    
+    # =============================================================================
+    # KPI 7: TODAY SAILING
+    # =============================================================================
+    
+    today = pd.Timestamp.today()
+    
+    today_sailed = latest_etd_df[
+        latest_etd_df["etd"].astype(str).str[:10] == today.date()
+    ]["container_id"].nunique()
+    
+    # =============================================================================
+    # DATA TABLE
+    # =============================================================================
+    
+    daily_events = df[
+        (df["event_date"] >= start_date) &
+        (df["event_date"] < end_date)
+    ].copy()
+    # -----------------------------
+    # FORMAT DATE COLUMNS (DISPLAY ONLY)
+    # -----------------------------
+    date_cols = ["event_date", "etd", "eta"]
+    
+    for col in date_cols:
+        if col in daily_events.columns:
+            daily_events[col] = pd.to_datetime(daily_events[col], errors="coerce").astype(str).str[:10]
+    
+    # =============================================================================
+    # KPI DISPLAY
+    # =============================================================================
+    
+    st.header("📊 Booking KPIs")
+    
+    col1, col2, col3, col4, col5, col6 = st.columns(6)
+    
+    col1.metric("📥 Bookings Received", total_bookings)
+    col2.metric("✅ Bookings Approved", total_approved)
+    col3.metric("📦 Containers Created", total_containers)
+    col4.metric("📉 Booking Backlog", backlog)
+    col5.metric("⚠️ Approved POs w/o Container", missing_container_count)
+    col6.metric(
+        "🚢 Containers Sailing",
+        containers_sailing_in_range,
+        delta=f"Today: {today_sailed}"
+    )
+
+    # =========================================================================
+    # CANONICAL BOOKING KPI TABLE
+    # Built once here from the dashboard variables above.
+    # Reused directly by the MOM email — no separate calculation needed.
+    # =========================================================================
+    booking_kpi = pd.DataFrame({
+        "KPI": [
+            "Bookings Received",
+            "Bookings Approved",
+            "Containers Created",
+            "Booking Backlog",
+            "Approved POs Without Container",
+            "Containers Sailing",
+        ],
+        "Count": [
+            total_bookings,
+            total_approved,
+            total_containers,
+            backlog,
+            missing_container_count,
+            containers_sailing_in_range,
+        ],
+    })
+
+    # =============================================================================
+    # DATA TABLE
+    # =============================================================================
+    st.subheader("📋 Booking Events")
+    
+    st.dataframe(
+        daily_events.sort_values("event_date"),
+        use_container_width=True
+    )
+    
+    # =============================================================================
+    # 📈 MONTHLY CONTAINER CREATION TREND (INDEPENDENT OF FILTERS)
+    # =============================================================================
+    import altair as alt
+    
+    st.subheader("📈 Monthly Container Creation Trend")
+    
+    # -----------------------------------------------------------------------------
+    # STEP 1: FIRST BOOKING PER CONTAINER (LIFECYCLE START)
+    # -----------------------------------------------------------------------------
+    first_booking_trend = (
+        bookings[bookings["is_booking"]]
+        .sort_values("event_date")
+        .groupby("container_id", as_index=False)
+        .first()
+    )
+    
+    # -----------------------------------------------------------------------------
+    # STEP 2: CREATE MONTH (DISPLAY + SORT KEY)
+    # -----------------------------------------------------------------------------
+    first_booking_trend["month"] = first_booking_trend["event_date"].dt.strftime("%b %Y")
+    first_booking_trend["month_sort"] = first_booking_trend["event_date"].dt.to_period("M")
+    
+    # -----------------------------------------------------------------------------
+    # STEP 3: AGGREGATE (TRUE NEW CONTAINERS)
+    # -----------------------------------------------------------------------------
+    monthly_trend = (
+        first_booking_trend
+        .groupby(["month", "month_sort"])["container_id"]
+        .nunique()
+        .reset_index(name="new_containers")
+        .sort_values("month_sort")
+    )
+    
+    # -----------------------------------------------------------------------------
+    # STEP 4: MOM GROWTH %
+    # -----------------------------------------------------------------------------
+    monthly_trend["mom_change_%"] = (
+        monthly_trend["new_containers"].pct_change() * 100
+    ).round(1)
+    
+    monthly_trend["mom_change_%"] = monthly_trend["mom_change_%"].fillna("")
+    
+    # -----------------------------------------------------------------------------
+    # STEP 5: DISPLAY METRICS
+    # -----------------------------------------------------------------------------
+    col1, col2 = st.columns(2)
+    
+    total_containers_all_time = int(monthly_trend["new_containers"].sum())
+    
+    col1.metric(
+        "Total Containers (All Time)",
+        total_containers_all_time
+    )
+    
+    if not monthly_trend.empty:
+        latest_month = monthly_trend.iloc[-1]
+    
+        mom = latest_month["mom_change_%"]
+    
+        # Handle first month (no comparison)
+        if mom == "" or pd.isna(mom):
+            delta_text = "—"
+        else:
+            delta_text = f"{mom}%"
+    
+        col2.metric(
+            f"Latest Month ({latest_month['month']})",
+            int(latest_month["new_containers"]),
+            delta=delta_text
+        )
+    else:
+        col2.metric("Latest Month", 0)
+    
+    # -----------------------------------------------------------------------------
+    # STEP 6: BAR CHART (FIXED + VISIBLE)
+    # -----------------------------------------------------------------------------
+    chart_df = monthly_trend.copy()
+    chart_df = chart_df.sort_values("month_sort")
+    
+    # Ensure numeric
+    chart_df["new_containers"] = pd.to_numeric(chart_df["new_containers"], errors="coerce")
+    
+    # Force correct order
+    chart_df["month"] = pd.Categorical(
+        chart_df["month"],
+        categories=chart_df["month"],
+        ordered=True
+    )
+    
+    chart = alt.Chart(chart_df).mark_bar(size=40).encode(
+        x=alt.X(
+            "month:N",
+            title="Month",
+            sort=list(chart_df["month"])
+        ),
+        y=alt.Y(
+            "new_containers:Q",
+            title="Containers",
+            scale=alt.Scale(domain=[0, chart_df["new_containers"].max() * 1.2])
+        ),
+        tooltip=[
+            alt.Tooltip("month", title="Month"),
+            alt.Tooltip("new_containers", title="Containers"),
+            alt.Tooltip("mom_change_%", title="MoM %")
+        ]
+    )
+    
+    st.altair_chart(chart, use_container_width=True)
+    
+    # -----------------------------------------------------------------------------
+    # STEP 7: OPTIONAL TABLE (FOR DEBUG / TRUST)
+    # -----------------------------------------------------------------------------
+    with st.expander("📊 Monthly Breakdown"):
+        st.dataframe(
+            monthly_trend.drop(columns=["month_sort"]),
+            use_container_width=True
+        )
+        
+        
+        
+    
+    # =============================================================================
+    # 🚨 UNMAPPED BOOKINGS (GLOBAL + MAPPING VALIDATED)
+    # =============================================================================
+    
+    df_map = shipment_mapping_raw.copy()
+    df_map.columns = df_map.columns.str.lower().str.strip()
+    
+    
+    # -----------------------------------------------------------------------------
+    # FIX KEY TYPES
+    # -----------------------------------------------------------------------------
+    bookings["po_number"] = bookings["po_number"].astype(str).str.strip()
+    df_map["po_number"] = df_map["po_number"].astype(str).str.strip()
+    
+    df_map.rename(columns={"container_id": "container_map"}, inplace=True)
+    
+    # -----------------------------------------------------------------------------
+    # MERGE
+    # -----------------------------------------------------------------------------
+    df_check = bookings.merge(
+        df_map[["po_number", "container_map"]],
+        on="po_number",
+        how="left"
+    )
+    
+    # -----------------------------------------------------------------------------
+    # TRUE UNMAPPED (NO DATE FILTER)
+    # -----------------------------------------------------------------------------
+    unmapped = df_check[
+        df_check["is_booking"] &
+        (
+            df_check["container_id"].isna() &
+            df_check["container_map"].isna()
+        )
+    ]
+    
+    # -----------------------------------------------------------------------------
+    # REMOVE DUPLICATES (LATEST STATE PER PO)
+    # -----------------------------------------------------------------------------
+    unmapped_latest = (
+        unmapped.sort_values("event_date")
+        .groupby("po_number", as_index=False)
+        .last()
+    )
+    
+    unmapped_count = unmapped_latest["po_number"].nunique()
+    
+    unmapped_latest["days_since_booking"] = (
+        pd.Timestamp.today() - unmapped_latest["event_date"]
+    ).dt.days
+    
+    # -----------------------------------------------------------------------------
+    # KPI
+    # -----------------------------------------------------------------------------
+    st.subheader("🚨 Booking Gaps (Current State)")
+    
+    st.metric(
+        "⚠️ True Unmapped Bookings",
+        unmapped_count,
+        help="Bookings with no container assigned in both booking and mapping layer"
+    )
+    
+    # -----------------------------------------------------------------------------
+    # TABLE
+    # -----------------------------------------------------------------------------
+    st.subheader("📋 Current Unmapped Bookings")
+    
+    unmapped_display = unmapped_latest.copy()
+    
+    for col in ["event_date", "etd", "eta"]:
+        if col in unmapped_display.columns:
+            unmapped_display[col] = pd.to_datetime(unmapped_display[col], errors="coerce").astype(str).str[:10]
+    
+    st.dataframe(
+        unmapped_display.sort_values("event_date", ascending=False),
+        use_container_width=True
+    )
+        
+    
+    
+    
+
+    
+    # =============================================================================
+    # 🔁 HIGH ROLLOVER CONTAINERS (CORRECT LOGIC)
+    # =============================================================================
+    st.subheader("🔁 High Rollover Containers")
+    
+    rollover_summary = get_rollover_summary(bookings)
+    
+    high_rollover = rollover_summary[
+        rollover_summary["rollover_count"] > 1
+    ]
+    
+    st.metric(
+        "Containers with Multiple Rollovers",
+        high_rollover["container_id"].nunique()
+    )
+    
+    st.dataframe(
+        high_rollover.sort_values("rollover_count", ascending=False),
+        use_container_width=True
+    )
+    
+    # =============================================================================
+    # 🔍 CONTAINER DRILLDOWN
+    # =============================================================================
+    st.subheader("🔍 Container Drilldown")
+    
+    container_list = sorted(bookings["container_id"].dropna().unique())
+    
+    search_container = st.text_input(
+        "Enter Container Number",
+        placeholder= ""
+    )
+    
+    if search_container:
+    
+        search_container = search_container.strip().upper()
+    
+        if search_container in container_list:
+    
+            container_data = bookings[
+                bookings["container_id"] == search_container
+            ].sort_values("event_date")
+    
+            st.subheader(f"📦 Container Timeline: {search_container}")
+    
+            container_display = container_data.copy()
+            
+            for col in ["event_date", "etd", "eta"]:
+                if col in container_display.columns:
+                    container_display[col] = pd.to_datetime(container_display[col], errors="coerce").astype(str).str[:10]
+            
+            st.dataframe(
+                container_display,
+                use_container_width=True
+            )
+                
+            # Optional quick insight
+            rollover_count = (
+                container_data["event_status"] == "ROLLOVER"
+            ).sum()
+    
+            st.metric(
+                "Total Rollovers",
+                int(rollover_count)
+            )
+    
+        else:
+            st.warning("Container not found")
+          
+            
+            
+          
+            
+          
+
+with tab2:
+
+    st.title("🚢 Container Movement Control Tower")
+
+    df_exec = build_execution_master(
+        in_transit_raw,
+        inventory_raw,
+        shipment_mapping_raw
+    )
+
+    # --------------------------------------------------
+    # DATA INTEGRITY CHECK
+    # --------------------------------------------------
+    issues_df, container_check = get_container_data_issues(df_exec)
+
+    # =============================================================================
+    # 📊 STATUS (TOP PRIORITY — DECISION VIEW)
+    # =============================================================================
+    st.header("📊 Container Status")
+
+    if "sipl_status" in df_exec.columns:
+
+        status_df = df_exec.copy()
+
+        status_df["sipl_status"] = (
+            status_df["sipl_status"]
+            .astype(str)
+            .str.upper()
+            .str.strip()
+        )
+
+        status_summary = (
+            status_df.groupby("sipl_status")
+            .agg(container_count=("container_id", "nunique"))
+            .reset_index()
+            .sort_values("container_count", ascending=False)
+        )
+
+        total = status_summary["container_count"].sum()
+
+        # 🔴 Bottleneck KPI
+        #if not status_summary.empty:
+            #top = status_summary.iloc[0]
+
+            #st.metric(
+               # f"📌 Bottleneck: {top['sipl_status']}",
+                #top["container_count"],
+               # delta=f"{round((top['container_count']/total)*100,1)}% of total"
+           # )
+
+        # 📊 Distribution Table (CLEAN + SIMPLE)
+        
+        status_summary = status_summary.rename(columns={
+            "sipl_status": "Status",
+            "container_count": "Containers"
+        })
+        
+        # Optional: % with no decimals
+        status_summary["%"] = (
+            (status_summary["Containers"] / total) * 100
+        ).round(0).astype(int)
+        
+        # 🔴 Highlight problematic statuses
+        def highlight(row):
+            val = str(row.get("Status", ""))
+            if any(x in val for x in ["HOLD", "EXAM", "DAMAGED"]):
+                return ["background-color: #5c1a1a"] * len(row)
+            return [""] * len(row)
+        
+        # If you ONLY want Status + Containers → drop %
+        show_cols = ["Status", "Containers", "%"]  # change to ["Status", "Containers", "%"] if needed
+        
+        st.dataframe(
+            status_summary[show_cols]
+            .style.apply(highlight, axis=1),
+            use_container_width=True
+        )
+
+    # =============================================================================
+    # 🚢 CURRENT MOVEMENT
+    # =============================================================================
+    st.header("🚢 Current Movement")
+
+    col1, col2, col3 = st.columns(3)
+
+    col1.metric("🚢 On Water", get_containers_on_water(df_exec))
+    col2.metric("📍 Arriving at port Today", get_arriving_today(df_exec))
+    col3.metric("🏢 Reaching Branch Today", get_location_reached(df_exec))
+
+    # =============================================================================
+    # 📅 UPCOMING
+    # =============================================================================
+    st.header("📅 Upcoming Movement (Next 7 Days)")
+
+    col4, col5 = st.columns(2)
+
+    col4.metric("📍 Port ETA", get_next_7_days_arrivals(df_exec))
+    col5.metric("📦 Branch ETA", get_location_next_7_days(df_exec))
+
+    # =============================================================================
+    # 🚨 EXCEPTIONS
+    # =============================================================================
+    st.header("🚨 Exceptions")
+
+    if "sipl_status" in df_exec.columns:
+
+        exception_df = df_exec[
+            df_exec["sipl_status"].str.upper().isin([
+                "ON EXAM", "DAMAGED", "ON HOLD"
+            ])
+        ]
+
+        st.metric(
+            "Containers in Exception",
+            exception_df["container_id"].nunique()
+        )
+
+        exception_display = exception_df.copy()
+
+        for col in exception_display.columns:
+            if pd.api.types.is_datetime64_any_dtype(exception_display[col]):
+                exception_display[col] = exception_display[col].astype(str).str[:10]
+
+        st.dataframe(exception_display, use_container_width=True)
+
+    # =============================================================================
+    # 🚨 LFD RISK
+    # =============================================================================
+    st.header("🚨 LFD Risk (Demurrage Exposure)")
+
+    breach_df, approaching_df = get_lfd_risk(df_exec)
+
+    st.markdown(f"""
+    🔴 **LFD Breach:** {breach_df['container_id'].nunique()}  
+    🟡 **Approaching (Next 3 Days):** {approaching_df['container_id'].nunique()}
+    """)
+
+    def format_dates(df):
+        df = df.copy()
+        for col in df.columns:
+            if pd.api.types.is_datetime64_any_dtype(df[col]):
+                df[col] = df[col].astype(str).str[:10]
+        return df
+
+    st.markdown("### 🔴 Already Past LFD")
+    st.dataframe(format_dates(breach_df), use_container_width=True)
+
+    st.markdown("### 🟡 Approaching LFD")
+    st.dataframe(format_dates(approaching_df), use_container_width=True)
+
+    # =============================================================================
+    # 📋 DOCUMENTATION RISK
+    # =============================================================================
+    st.header("📋 Documentation Risk")
+    
+    risk_df = get_port_eta_doc_risk(df_exec)
+    
+    already_df = risk_df[risk_df["risk_type"] == "Already at Port"]
+    upcoming_df = risk_df[risk_df["risk_type"] == "Upcoming"]
+    
+    
+    # -----------------------------
+    # 🔧 FORMAT DATES (REMOVE TIME)
+    # -----------------------------
+    def format_dates(df):
+        df = df.copy()
+        for col in df.columns:
+            if pd.api.types.is_datetime64_any_dtype(df[col]):
+                df[col] = df[col].astype(str).str[:10]
+        return df
+    
+    
+    already_display = format_dates(already_df)
+    upcoming_display = format_dates(upcoming_df)
+    
+    
+    # -----------------------------
+    # DISPLAY
+    # -----------------------------
+    st.markdown(f"🔴 Already at Port: {already_df['container_id'].nunique()}")
+    st.dataframe(already_display, use_container_width=True)
+    
+    st.markdown(f"🟡 Upcoming: {upcoming_df['container_id'].nunique()}")
+    st.dataframe(upcoming_display, use_container_width=True)
+
+    # =============================================================================
+    # 🚨 DATA INTEGRITY
+    # =============================================================================
+    st.header("🚨 Container Data Integrity")
+
+    st.metric(
+        "Problem Containers",
+        container_check[container_check["issue_type"] != ""]["container_id"].nunique()
+    )
+
+    problem_display = issues_df.copy()
+
+    for col in problem_display.columns:
+        if pd.api.types.is_datetime64_any_dtype(problem_display[col]):
+            problem_display[col] = problem_display[col].astype(str).str[:10]
+
+    problem_display = problem_display.loc[:, ~problem_display.columns.duplicated()]
+
+    st.dataframe(problem_display, use_container_width=True)
+
+    # =============================================================================
+    # 📊 DELAY PERFORMANCE
+    # =============================================================================
+    st.header("📊 Delay Performance")
+
+    eta_df = get_eta_performance(df_exec, bookings)
+
+    delay_df = eta_df[
+        eta_df["transit_delay"].notna() &
+        (eta_df["transit_delay"] > 0)
+    ]
+
+    delay_df = (
+        delay_df.sort_values("transit_delay", ascending=False)
+        .groupby("container_id", as_index=False)
+        .first()
+    )
+
+    st.metric("Delayed Containers", delay_df["container_id"].nunique())
+
+    delay_display = delay_df.copy()
+
+    for col in delay_display.columns:
+        if pd.api.types.is_datetime64_any_dtype(delay_display[col]):
+            delay_display[col] = delay_display[col].astype(str).str[:10]
+
+    st.dataframe(delay_display, use_container_width=True)
+
+    # =============================================================================
+    # 🟠 FORWARDER PERFORMANCE
+    # =============================================================================
+    st.header("🟠 Forwarder Performance")
+
+    if not delay_df.empty:
+
+        forwarder_perf = (
+            delay_df.groupby("forwarder")
+            .agg(
+                container_count=("container_id", "nunique"),
+                avg_delay_days=("transit_delay", "mean")
+            )
+            .reset_index()
+            .sort_values("avg_delay_days", ascending=False)
+        )
+
+        forwarder_perf["avg_delay_days"] = forwarder_perf["avg_delay_days"].round(1)
+
+        st.dataframe(forwarder_perf, use_container_width=True)
+
+    else:
+        st.info("No delay data available")
+        
+        
