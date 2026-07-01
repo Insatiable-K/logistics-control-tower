@@ -1217,11 +1217,24 @@ def get_lfd_risk(df_exec, days_ahead=3):
 def get_arriving_invoice_risk(df_exec, invoice_compliance, days=3):
 
     today = pd.Timestamp.today().normalize()
-
+    
     arriving = df_exec[
-        (df_exec["port_eta"] >= today) &
+        (df_exec["port_eta"].notna()) &
         (df_exec["port_eta"] <= today + pd.Timedelta(days=days))
     ].copy()
+    
+    # Optional - classify the arrival
+    arriving["arrival_status"] = "Next 3 Days"
+    
+    arriving.loc[
+        arriving["port_eta"].dt.normalize() == today,
+        "arrival_status"
+    ] = "Today"
+    
+    arriving.loc[
+        arriving["port_eta"] < today,
+        "arrival_status"
+    ] = "Past Due"
 
     arriving = arriving.merge(
         invoice_compliance,
