@@ -857,6 +857,12 @@ with tab2:
 with tab3:
 
     st.title("🧾 Invoice Compliance Dashboard")
+    
+    view_mode = st.radio(
+    "Invoice View",
+    ["Missing Bills", "Pending Bills"],
+    horizontal=True
+)
 
     BILL_CATEGORIES = ["OF", "CUSTOMS", "DUTY", "DRAYAGE"]
 
@@ -897,15 +903,32 @@ with tab3:
         )
 
         # ------------------------------------------------------------------
-        # MISSING BILLS MASK
+        # FILTER BASED ON USER SELECTION
         # ------------------------------------------------------------------
-        if "missing_bills" in invoice_risk.columns:
-            missing_mask = _has_missing_bills(invoice_risk["missing_bills"])
+        
+        if view_mode == "Missing Bills":
+        
+            bill_column = "missing_bills"
+        
         else:
-            missing_mask = pd.Series(False, index=invoice_risk.index)
-
-        risk_with_missing = invoice_risk[missing_mask]
-
+        
+            bill_column = "pending_bills"
+        
+        
+        if bill_column in invoice_risk.columns:
+        
+            bill_mask = _has_missing_bills(
+                invoice_risk[bill_column]
+            )
+        
+        else:
+        
+            bill_mask = pd.Series(
+                False,
+                index=invoice_risk.index
+            )
+        
+        risk_filtered = invoice_risk[bill_mask].copy()
         # ------------------------------------------------------------------
         # ROW 1 KPIs — OVERVIEW
         # ------------------------------------------------------------------
@@ -915,20 +938,37 @@ with tab3:
             "Containers Requiring Invoice Review",
             invoice_risk["container_id"].nunique()
         )
-        col2.metric(
-            "Containers Missing Bills",
-            risk_with_missing["container_id"].nunique()
+        label = (
+            "Containers Missing Bills"
+            if view_mode == "Missing Bills"
+            else
+            "Containers With Pending Bills"
         )
-
+        
+        col2.metric(
+            label,
+            risk_filtered["container_id"].nunique()
+        )
         # ------------------------------------------------------------------
         # ROW 2 KPIs — PER CATEGORY
         # ------------------------------------------------------------------
-        st.subheader("📋 Pending Bills by Category")
+        st.subheader(
+            f"📋 {view_mode} by Category"
+        )
+        
+        
         cat_cols = st.columns(4)
         for i, cat in enumerate(BILL_CATEGORIES):
+        
+            count = risk_filtered[
+                risk_filtered[bill_column]
+                .astype(str)
+                .str.contains(cat, case=False, na=False)
+            ]["container_id"].nunique()
+        
             cat_cols[i].metric(
-                f"⏳ {cat} Pending",
-                _containers_missing_category(risk_with_missing, cat)
+                f"⏳ {cat}",
+                count
             )
 
         # ------------------------------------------------------------------
@@ -936,10 +976,19 @@ with tab3:
         # ------------------------------------------------------------------
         st.subheader("Containers Requiring Attention")
 
-        show_cols = ["container_id","po_number","arrival_status","port_eta","missing_bills"]
+        show_cols = ["container_id","po_number","arrival_status","port_eta",bill_column]
         show_cols = [c for c in show_cols if c in invoice_risk.columns]
 
-        attention_df = risk_with_missing[show_cols].drop_duplicates()
+        attention_df = risk_filtered[
+            show_cols
+        ].drop_duplicates()
+        
+        
+        attention_df = attention_df.rename(
+            columns={
+                bill_column: "Bills"
+            }
+        )        
 
         # Strip time from port_eta
         if "port_eta" in attention_df.columns:
@@ -962,9 +1011,9 @@ with tab3:
 
         for cat in BILL_CATEGORIES:
             cat_df = attention_df[
-                attention_df["missing_bills"]
-                .astype(str)
-                .str.contains(cat, case=False, na=False)
+                attention_df["Bills"]
+                    .astype(str)
+                    .str.contains(cat, case=False, na=False)
             ].copy()
 
             count = cat_df["container_id"].nunique() if not cat_df.empty else 0
