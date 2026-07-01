@@ -912,7 +912,7 @@ with tab3:
         st.subheader("📊 Overview")
         col1, col2 = st.columns(2)
         col1.metric(
-            "Containers Arriving (Next 3 Days)",
+            "Containers Requiring Invoice Review",
             invoice_risk["container_id"].nunique()
         )
         col2.metric(
@@ -936,7 +936,7 @@ with tab3:
         # ------------------------------------------------------------------
         st.subheader("Containers Requiring Attention")
 
-        show_cols = ["container_id", "po_number", "port_eta", "missing_bills"]
+        show_cols = ["container_id","po_number","arrival_status","port_eta","missing_bills"]
         show_cols = [c for c in show_cols if c in invoice_risk.columns]
 
         attention_df = risk_with_missing[show_cols].drop_duplicates()
