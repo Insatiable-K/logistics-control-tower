@@ -1,5 +1,23 @@
 
 import pandas as pd
+import re
+import numpy as np
+
+# -----------------------------------------------------------------------------
+# Clean container IDs – keep only ISO‑6346 codes (4 letters + 7 digits).
+# Returns NaN for anything that does not match the pattern.
+# -----------------------------------------------------------------------------
+def clean_container_strict(val):
+    if pd.isna(val) or str(val).strip() == "":
+        return np.nan
+    val = str(val).upper().strip()
+    # Exclude common non‑container markers
+    for pat in ["TRUCK", "L&S", "R&L"]:
+        if pat in val:
+            return np.nan
+    match = re.search(r"\b[A-Z]{4}[0-9]{7}\b", val)
+    return match.group(0) if match else np.nan
+
 # -----------------------------------------------------------------------------
 # LOAD SHIPMENT MAPPING
 # -----------------------------------------------------------------------------
@@ -32,32 +50,33 @@ def load_shipment_mapping(shipment_mapping):
 # LOAD BOOKINGS (ENRICHED)
 # -----------------------------------------------------------------------------
 def load_bookings(bookings_df, shipment_mapping_df):
+    """Load bookings and ensure container IDs are valid ISO‑6346 codes.
 
+    The raw bookings may contain free‑form text in the ``container_id`` column –
+    e.g. ``TRUCK 12`` or ``L&S`` – which should be ignored.  This function
+    normalises the column, then coalesces any missing values from the shipment
+    mapping, finally cleaning the result so *only* proper container numbers
+    remain (``AAAA1234567``).  Invalid values are set to ``NaN``.
+    """
     # Instead of SQL read
     df = bookings_df.copy()
 
-    # Normalize
+    # Normalise simple fields
     df["event_status"] = (
         df["event_status"]
         .astype(str)
         .str.strip()
         .str.upper()
     )
-
-    df["event_date"] = pd.to_datetime(
-        df["event_date"],
-        errors="coerce"
-    )
-
-    df["po_number"] = pd.to_numeric(
-        df["po_number"],
-        errors="coerce"
-    ).astype("Int64")
-
-    # Instead of loading from SQL
-    mapping = load_shipment_mapping(
-        shipment_mapping_df
-    )
+    df["event_date"] = pd.to_datetime(df["event_date"], errors="coerce")
+    df["po_number"] = pd.to_numeric(df["po_number"], errors="coerce").astype("Int64")
+    # -----------------------------------------------------
+    # Clean container_id – keep only ISO‑6346 codes (4 letters + 7 digits)
+    # -----------------------------------------------------
+    if "container_id" in df.columns:
+        df["container_id"] = df["container_id"].apply(clean_container_strict)
+    # Load shipment‑mapping (already cleans container_id there)
+    mapping = load_shipment_mapping(shipment_mapping_df)
 
     # Merge mapping — only use container_id from mapping where bookings has none
     df = df.merge(
@@ -69,13 +88,10 @@ def load_bookings(bookings_df, shipment_mapping_df):
 
     # Fill missing containers only
     if "container_id_map" in df.columns:
-        df["container_id"] = (
-            df["container_id"]
-            .combine_first(df["container_id_map"])
-        )
-
-        df = df.drop(columns=["container_id_map"])
-
+        df["container_id"] = df["container_id"].combine_first(df["container_id_map"])
+        df = df.drop(columns=["container_id_map"])    # Ensure the final column still contains only valid container numbers
+    if "container_id" in df.columns:
+        df["container_id"] = df["container_id"].apply(clean_container_strict)
     return df
 
 # -----------------------------------------------------------------------------
@@ -792,6 +808,24 @@ def get_port_eta_doc_risk(df):
 def get_eta_performance(df_exec, bookings):
 
     import pandas as pd
+import re
+import numpy as np
+
+# -----------------------------------------------------------------------------
+# Clean container IDs – keep only ISO‑6346 codes (4 letters + 7 digits).
+# Returns NaN for anything that does not match the pattern.
+# -----------------------------------------------------------------------------
+def clean_container_strict(val):
+    if pd.isna(val) or str(val).strip() == "":
+        return np.nan
+    val = str(val).upper().strip()
+    # Exclude common non‑container markers
+    for pat in ["TRUCK", "L&S", "R&L"]:
+        if pat in val:
+            return np.nan
+    match = re.search(r"\b[A-Z]{4}[0-9]{7}\b", val)
+    return match.group(0) if match else np.nan
+
 
     # -----------------------------
     # STEP 1 — LATEST BOOKING PER CONTAINER
@@ -986,6 +1020,24 @@ def get_pos_without_container(bookings):
 def get_container_data_issues(df_exec):
 
     import pandas as pd
+import re
+import numpy as np
+
+# -----------------------------------------------------------------------------
+# Clean container IDs – keep only ISO‑6346 codes (4 letters + 7 digits).
+# Returns NaN for anything that does not match the pattern.
+# -----------------------------------------------------------------------------
+def clean_container_strict(val):
+    if pd.isna(val) or str(val).strip() == "":
+        return np.nan
+    val = str(val).upper().strip()
+    # Exclude common non‑container markers
+    for pat in ["TRUCK", "L&S", "R&L"]:
+        if pat in val:
+            return np.nan
+    match = re.search(r"\b[A-Z]{4}[0-9]{7}\b", val)
+    return match.group(0) if match else np.nan
+
 
     df = df_exec.copy()
 
@@ -1174,6 +1226,24 @@ def get_container_data_issues(df_exec):
 def get_lfd_risk(df_exec, days_ahead=3):
 
     import pandas as pd
+import re
+import numpy as np
+
+# -----------------------------------------------------------------------------
+# Clean container IDs – keep only ISO‑6346 codes (4 letters + 7 digits).
+# Returns NaN for anything that does not match the pattern.
+# -----------------------------------------------------------------------------
+def clean_container_strict(val):
+    if pd.isna(val) or str(val).strip() == "":
+        return np.nan
+    val = str(val).upper().strip()
+    # Exclude common non‑container markers
+    for pat in ["TRUCK", "L&S", "R&L"]:
+        if pat in val:
+            return np.nan
+    match = re.search(r"\b[A-Z]{4}[0-9]{7}\b", val)
+    return match.group(0) if match else np.nan
+
 
     df = df_exec.copy()
 

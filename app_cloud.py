@@ -915,14 +915,9 @@ with tab3:
     # ------------------------------------------------------------------
     # Split the risk df
     # ------------------------------------------------------------------
-    missing_df  = invoice_risk[
-        invoice_risk["missing_bills"].astype(str).str.strip().replace({"": None, "nan": None}).notna()
-    ].copy()
+    missing_df  = invoice_risk[invoice_risk["missing_bills"].fillna("").astype(str).str.strip() != ""].copy()
 
-    pending_df  = invoice_risk[
-        invoice_risk.get("pending_bills", pd.Series(dtype=str)).astype(str).str.strip()
-        .replace({"": None, "nan": None}).notna()
-    ].copy() if "pending_bills" in invoice_risk.columns else pd.DataFrame()
+    pending_df  = invoice_risk[invoice_risk.get("pending_bills", pd.Series(dtype=str)).fillna("").astype(str).str.strip() != ""].copy() if "pending_bills" in invoice_risk.columns else pd.DataFrame()
 
     # ================================================================
     # INNER TABS
