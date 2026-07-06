@@ -24,6 +24,7 @@ from logic_cloud import (
     get_container_data_issues,
     get_lfd_risk,
     get_arriving_invoice_risk,
+    get_operational_invoice_dashboard,
 )
 
 
@@ -849,10 +850,12 @@ with tab2:
 
 
 # =============================================================================
-# TAB 3 — INVOICE COMPLIANCE DASHBOARD
-# Two inner sub-tabs:
-#   🔴 Missing Bills  — bill type has NO record at all (neither actual nor pending)
-#   ⏳ Pending Bills  — placeholder "PENDING" entered; team needs to chase vendor
+# TAB 3 — INVOICE COMPLIANCE DASHBOARD (OPERATIONAL)
+# Three mutually exclusive sub-tabs driven by shipment window (Today + 2 days):
+#   🔴 Missing Bills  — no pending, but at least one missing bill type
+#   ⏳ Pending Bills  — at least one pending placeholder (work initiated)
+#   ✅ Invoice Complete  — all 4 bill types received (Actual)
+# Priority order for classification: Pending → Missing → Complete
 # =============================================================================
 with tab3:
 
@@ -861,15 +864,28 @@ with tab3:
     BILL_CATEGORIES = ["OF", "CUSTOMS", "DUTY", "DRAYAGE"]
     BILL_LABELS     = {"OF": "Ocean Freight", "CUSTOMS": "Customs", "DUTY": "Duty", "DRAYAGE": "Drayage"}
 
-    if invoice_compliance_raw.empty:
+    # ------------------------------------------------------------------
+    # Load raw data needed for the operational dashboard
+    # We need: bills, gl_bills from the uploaded Excel
+    # ------------------------------------------------------------------
+    xls = pd.ExcelFile(uploaded_file)
+    bills_raw = pd.read_excel(xls, "bills") if "bills" in xls.sheet_names else pd.DataFrame()
+    gl_bills_raw = pd.read_excel(xls, "gl_bills") if "gl_bills" in xls.sheet_names else pd.DataFrame()
+    invoice_compliance_raw = (
+        pd.read_excel(xls, "invoice_compliance")
+        if "invoice_compliance" in xls.sheet_names
+        else pd.DataFrame()
+    )
+
+    if bills_raw.empty or gl_bills_raw.empty:
         st.warning(
-            "⚠️ No invoice_compliance sheet found in the uploaded file. "
+            "⚠️ Required sheets (bills, gl_bills) not found in the uploaded file. "
             "Re-run build_dashboard_data.py to include invoice data."
         )
         st.stop()
 
     # ------------------------------------------------------------------
-    # Build execution master once — shared across both sub-tabs
+    # Build execution master — shared across all sub-tabs
     # ------------------------------------------------------------------
     df_exec_inv = build_execution_master(
         in_transit_raw,
@@ -878,23 +894,24 @@ with tab3:
     )
 
     # ------------------------------------------------------------------
-    # Get all containers with any bill issue (missing OR pending)
-    # The function now returns Approaching, Today, Past ETA containers
+    # Call the new operational dashboard function
+    # Returns three mutually exclusive DataFrames + KPIs
     # ------------------------------------------------------------------
-    invoice_risk = get_arriving_invoice_risk(
-        df_exec_inv,
-        invoice_compliance_raw,
-        days=3
+    dashboard = get_operational_invoice_dashboard(
+        df_exec=df_exec_inv,
+        bills_df=bills_raw,
+        gl_bills_df=gl_bills_raw,
+        shipment_mapping_df=shipment_mapping_raw,
+        days_ahead=2  # Today + 2 = 3 days window
     )
 
-    if invoice_risk.empty:
-        st.success("✅ All containers have complete invoices. Nothing to action.")
-        st.stop()
-
-    today = pd.Timestamp.today().normalize()
+    missing_df = dashboard["missing_bills"]
+    pending_df = dashboard["pending_bills"]
+    complete_df = dashboard["invoice_complete"]
+    kpis = dashboard["kpis"]
 
     # ------------------------------------------------------------------
-    # Helper: clean port_eta for display
+    # Helper: format dates for display
     # ------------------------------------------------------------------
     def fmt_date_col(df, col="port_eta"):
         d = df.copy()
@@ -902,42 +919,47 @@ with tab3:
             d[col] = pd.to_datetime(d[col], errors="coerce").dt.strftime("%Y-%m-%d")
         return d
 
-    # ------------------------------------------------------------------
-    # Helper: count containers with a specific bill issue in a column
-    # ------------------------------------------------------------------
     def count_by_cat(df, col, cat):
         if col not in df.columns:
             return 0
         return df[
             df[col].astype(str).str.contains(cat, case=False, na=False)
-        ]["container_id"].nunique()
+        ]["container"].nunique()
 
     # ------------------------------------------------------------------
-    # Split the risk df
+    # KPI ROW (top of tab)
     # ------------------------------------------------------------------
-    missing_df  = invoice_risk[invoice_risk["missing_bills"].fillna("").astype(str).str.strip() != ""].copy()
+    st.subheader("📊 Invoice KPIs — Arriving Next 3 Days")
+    k1, k2, k3, k4, k5, k6 = st.columns(6)
+    k1.metric("🚢 Containers Arriving", kpis["containers_arriving"])
+    k2.metric("✅ Invoice Complete", kpis["invoice_complete"])
+    k3.metric("🔴 Missing Bills", kpis["containers_missing_bills"])
+    k4.metric("⏳ Pending Bills", kpis["pending_bills"])
+    k5.metric("📈 Completion %", f"{kpis['invoice_completion_pct']}%")
+    k6.metric("📦 Avg Missing/Container", kpis["avg_missing_per_container"])
 
-    pending_df  = invoice_risk[invoice_risk.get("pending_bills", pd.Series(dtype=str)).fillna("").astype(str).str.strip() != ""].copy() if "pending_bills" in invoice_risk.columns else pd.DataFrame()
-
-    # ================================================================
-    # INNER TABS
-    # ================================================================
-    inv_tab1, inv_tab2 = st.tabs(["🔴 Missing Bills", "⏳ Pending Bills"])
+    # ------------------------------------------------------------------
+    # Three inner tabs (mutually exclusive)
+    # ------------------------------------------------------------------
+    inv_tab1, inv_tab2, inv_tab3 = st.tabs([
+        f"🔴 Missing Bills ({kpis['containers_missing_bills']})",
+        f"⏳ Pending Bills ({kpis['pending_bills']})",
+        f"✅ Invoice Complete ({kpis['invoice_complete']})"
+    ])
 
     # ================================================================
     # SUB-TAB 1 — MISSING BILLS
-    # A bill is MISSING when there is NO record for that type at all.
-    # Shows both approaching (next 3 days) and past-ETA containers.
+    # No pending bills, but at least one missing bill type
     # ================================================================
     with inv_tab1:
 
         st.markdown(
-            "> A **Missing Bill** means no record exists for that bill type — "
-            "not even a placeholder. These need to be obtained from the vendor urgently."
+            "> **Missing Bills**: No pending placeholder exists for these bill types. "
+            "The vendor has not been chased yet — these need urgent action to obtain invoices."
         )
 
         if missing_df.empty:
-            st.success("✅ No containers with completely missing bills.")
+            st.success("✅ No containers with missing bills in the arrival window.")
         else:
 
             # ---- OVERVIEW KPIs ----
@@ -949,10 +971,10 @@ with tab3:
             ]
 
             st.subheader("📊 Overview")
-            k1, k2, k3 = st.columns(3)
-            k1.metric("🚢 Approaching (≤3 days)", approaching_missing["container_id"].nunique())
-            k2.metric("⏰ Past ETA — Bills Outstanding", past_missing["container_id"].nunique())
-            k3.metric("📦 Total Containers Affected", missing_df["container_id"].nunique())
+            o1, o2, o3 = st.columns(3)
+            o1.metric("🚢 Approaching (≤3 days)", approaching_missing["container"].nunique())
+            o2.metric("⏰ Past ETA — Bills Outstanding", past_missing["container"].nunique())
+            o3.metric("📦 Total Containers Affected", missing_df["container"].nunique())
 
             # ---- PER-CATEGORY KPIs ----
             st.subheader("Missing Bills by Type")
@@ -964,7 +986,8 @@ with tab3:
                 )
 
             # ---- DISPLAY COLUMNS ----
-            show = ["container_id", "po_number", "arrival_status", "port_eta", "missing_bills"]
+            show = ["container", "sipl", "po_number", "port_eta", "supplier", "final_destination",
+                    "arrival_status", "days_until_arrival", "missing_bills"]
             show = [c for c in show if c in missing_df.columns]
 
             # ================================================================
@@ -1011,7 +1034,7 @@ with tab3:
                     ][show].drop_duplicates()
                 ).sort_values("port_eta")
 
-                count = cat_df["container_id"].nunique() if not cat_df.empty else 0
+                count = cat_df["container"].nunique() if not cat_df.empty else 0
                 label = (
                     f"❌ {BILL_LABELS[cat]}  —  "
                     f"{count} container{'s' if count != 1 else ''} missing this bill"
@@ -1025,20 +1048,19 @@ with tab3:
 
     # ================================================================
     # SUB-TAB 2 — PENDING BILLS
-    # A bill is PENDING when "PENDING" was entered as a placeholder.
-    # This means the vendor hasn't sent the actual bill yet.
-    # Team action: follow up with vendor and replace placeholder.
+    # At least one pending placeholder (work initiated)
+    # Priority over Missing — if a bill is pending, container goes here
     # ================================================================
     with inv_tab2:
 
         st.markdown(
-            "> A **Pending Bill** means your team has entered a **PENDING** placeholder "
+            "> **Pending Bills**: Your team has entered a **PENDING** placeholder "
             "because the vendor hasn't shared the actual bill yet. "
-            "Use this tab to track follow-ups and get real invoices entered."
+            "These are already in progress — follow up to get real invoices entered."
         )
 
-        if pending_df.empty or "pending_bills" not in invoice_risk.columns:
-            st.success("✅ No pending placeholders outstanding. All bills are actual invoices.")
+        if pending_df.empty:
+            st.success("✅ No pending placeholders outstanding in the arrival window.")
         else:
 
             # Split into approaching vs past
@@ -1052,9 +1074,9 @@ with tab3:
             # ---- OVERVIEW KPIs ----
             st.subheader("📊 Overview")
             p1, p2, p3 = st.columns(3)
-            p1.metric("🚢 Approaching with Pending Bills", approaching_pending["container_id"].nunique())
-            p2.metric("⏰ Past ETA with Pending Bills", past_pending["container_id"].nunique())
-            p3.metric("📦 Total Containers with Pending", pending_df["container_id"].nunique())
+            p1.metric("🚢 Approaching with Pending Bills", approaching_pending["container"].nunique())
+            p2.metric("⏰ Past ETA with Pending Bills", past_pending["container"].nunique())
+            p3.metric("📦 Total Containers with Pending", pending_df["container"].nunique())
 
             # ---- PER-CATEGORY PENDING KPIs ----
             st.subheader("Pending Bills by Type")
@@ -1070,7 +1092,8 @@ with tab3:
                 )
 
             # ---- DISPLAY COLUMNS ----
-            show_p = ["container_id", "po_number", "arrival_status", "port_eta", "pending_bills"]
+            show_p = ["container", "sipl", "po_number", "port_eta", "supplier", "final_destination",
+                      "arrival_status", "days_until_arrival", "pending_bills"]
             show_p = [c for c in show_p if c in pending_df.columns]
 
             # ================================================================
@@ -1110,14 +1133,20 @@ with tab3:
                 )
 
             # ================================================================
-            # SECTION 3 — BREAKDOWN BY BILL TYPE
-            # What to chase and with whom
+            # SECTION 3 — BREAKDOWN BY BILL TYPE (with vendor hints)
             # ================================================================
             st.subheader("📂 Pending Bills by Type — Who to Follow Up With")
             st.caption(
                 "Each expander shows which containers still need a real bill for that type. "
                 "Match the vendor (non_inventory_vendor in SPS) to know who to contact."
             )
+
+            vendor_hint = {
+                "OF":       "Freight Forwarder (Barsan, Savino, etc.)",
+                "CUSTOMS":  "DHS / Customs Broker (R.F. Barnes, etc.)",
+                "DUTY":     "DHS / Customs Broker",
+                "DRAYAGE":  "Drayage Carrier (Forward Intermodal, Palletized, Quick Load, etc.)",
+            }
 
             for cat in BILL_CATEGORIES:
                 cat_df = fmt_date_col(
@@ -1127,19 +1156,11 @@ with tab3:
                     ][show_p].drop_duplicates()
                 ).sort_values("port_eta")
 
-                count = cat_df["container_id"].nunique() if not cat_df.empty else 0
+                count = cat_df["container"].nunique() if not cat_df.empty else 0
                 label = (
                     f"⏳ {BILL_LABELS[cat]}  —  "
                     f"{count} pending placeholder{'s' if count != 1 else ''}"
                 )
-
-                # Who typically handles this bill type
-                vendor_hint = {
-                    "OF":       "Freight Forwarder (Barsan, Savino, etc.)",
-                    "CUSTOMS":  "DHS / Customs Broker (R.F. Barnes, etc.)",
-                    "DUTY":     "DHS / Customs Broker",
-                    "DRAYAGE":  "Drayage Carrier (Forward Intermodal, Palletized, Quick Load, etc.)",
-                }
 
                 with st.expander(label, expanded=(count > 0)):
                     if cat_df.empty:
@@ -1147,5 +1168,70 @@ with tab3:
                     else:
                         st.caption(f"📞 Typical vendor: **{vendor_hint.get(cat, 'Check SPS')}**")
                         st.dataframe(cat_df, use_container_width=True)
+
+    # ================================================================
+    # SUB-TAB 3 — INVOICE COMPLETE
+    # All 4 bill types received (Actual) — no pending, no missing
+    # ================================================================
+    with inv_tab3:
+
+        st.markdown(
+            "> **Invoice Complete**: All four required bill types (OF, CUSTOMS, DUTY, DRAYAGE) "
+            "have been received as actual invoices. No action needed."
+        )
+
+        if complete_df.empty:
+            st.info("No containers with fully complete invoices in the arrival window.")
+        else:
+
+            # Split complete into approaching vs past
+            approaching_complete = complete_df[
+                complete_df["arrival_status"].isin(["Today", "Approaching"])
+            ]
+            past_complete = complete_df[
+                complete_df["arrival_status"] == "Past ETA"
+            ]
+
+            # ---- OVERVIEW KPIs ----
+            st.subheader("📊 Overview")
+            c1, c2, c3 = st.columns(3)
+            c1.metric("🚢 Approaching — Complete", approaching_complete["container"].nunique())
+            c2.metric("⏰ Past ETA — Complete", past_complete["container"].nunique())
+            c3.metric("📦 Total Complete", complete_df["container"].nunique())
+
+            # ---- DISPLAY COLUMNS ----
+            show_c = ["container", "sipl", "po_number", "port_eta", "supplier", "final_destination",
+                      "arrival_status", "days_until_arrival", "invoice_completion_date"]
+            show_c = [c for c in show_c if c in complete_df.columns]
+
+            # ================================================================
+            # SECTION 1 — APPROACHING COMPLETE
+            # ================================================================
+            st.subheader("🚢 Approaching — Invoice Ready")
+            st.caption("Containers arriving within 3 days with all invoices received.")
+
+            if approaching_complete.empty:
+                st.info("No approaching containers have fully complete invoices.")
+            else:
+                st.dataframe(
+                    fmt_date_col(approaching_complete[show_c].drop_duplicates())
+                    .sort_values("port_eta"),
+                    use_container_width=True
+                )
+
+            # ================================================================
+            # SECTION 2 — PAST ETA COMPLETE
+            # ================================================================
+            st.subheader("✅ Past ETA — Invoice Complete")
+            st.caption("Containers that have arrived with all invoices received.")
+
+            if past_complete.empty:
+                st.info("No past-ETA containers with fully complete invoices.")
+            else:
+                st.dataframe(
+                    fmt_date_col(past_complete[show_c].drop_duplicates())
+                    .sort_values("port_eta"),
+                    use_container_width=True
+                )
 
 

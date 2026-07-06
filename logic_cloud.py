@@ -1,23 +1,5 @@
 
 import pandas as pd
-import re
-import numpy as np
-
-# -----------------------------------------------------------------------------
-# Clean container IDs – keep only ISO‑6346 codes (4 letters + 7 digits).
-# Returns NaN for anything that does not match the pattern.
-# -----------------------------------------------------------------------------
-def clean_container_strict(val):
-    if pd.isna(val) or str(val).strip() == "":
-        return np.nan
-    val = str(val).upper().strip()
-    # Exclude common non‑container markers
-    for pat in ["TRUCK", "L&S", "R&L"]:
-        if pat in val:
-            return np.nan
-    match = re.search(r"\b[A-Z]{4}[0-9]{7}\b", val)
-    return match.group(0) if match else np.nan
-
 # -----------------------------------------------------------------------------
 # LOAD SHIPMENT MAPPING
 # -----------------------------------------------------------------------------
@@ -50,33 +32,32 @@ def load_shipment_mapping(shipment_mapping):
 # LOAD BOOKINGS (ENRICHED)
 # -----------------------------------------------------------------------------
 def load_bookings(bookings_df, shipment_mapping_df):
-    """Load bookings and ensure container IDs are valid ISO‑6346 codes.
 
-    The raw bookings may contain free‑form text in the ``container_id`` column –
-    e.g. ``TRUCK 12`` or ``L&S`` – which should be ignored.  This function
-    normalises the column, then coalesces any missing values from the shipment
-    mapping, finally cleaning the result so *only* proper container numbers
-    remain (``AAAA1234567``).  Invalid values are set to ``NaN``.
-    """
     # Instead of SQL read
     df = bookings_df.copy()
 
-    # Normalise simple fields
+    # Normalize
     df["event_status"] = (
         df["event_status"]
         .astype(str)
         .str.strip()
         .str.upper()
     )
-    df["event_date"] = pd.to_datetime(df["event_date"], errors="coerce")
-    df["po_number"] = pd.to_numeric(df["po_number"], errors="coerce").astype("Int64")
-    # -----------------------------------------------------
-    # Clean container_id – keep only ISO‑6346 codes (4 letters + 7 digits)
-    # -----------------------------------------------------
-    if "container_id" in df.columns:
-        df["container_id"] = df["container_id"].apply(clean_container_strict)
-    # Load shipment‑mapping (already cleans container_id there)
-    mapping = load_shipment_mapping(shipment_mapping_df)
+
+    df["event_date"] = pd.to_datetime(
+        df["event_date"],
+        errors="coerce"
+    )
+
+    df["po_number"] = pd.to_numeric(
+        df["po_number"],
+        errors="coerce"
+    ).astype("Int64")
+
+    # Instead of loading from SQL
+    mapping = load_shipment_mapping(
+        shipment_mapping_df
+    )
 
     # Merge mapping — only use container_id from mapping where bookings has none
     df = df.merge(
@@ -88,10 +69,13 @@ def load_bookings(bookings_df, shipment_mapping_df):
 
     # Fill missing containers only
     if "container_id_map" in df.columns:
-        df["container_id"] = df["container_id"].combine_first(df["container_id_map"])
-        df = df.drop(columns=["container_id_map"])    # Ensure the final column still contains only valid container numbers
-    if "container_id" in df.columns:
-        df["container_id"] = df["container_id"].apply(clean_container_strict)
+        df["container_id"] = (
+            df["container_id"]
+            .combine_first(df["container_id_map"])
+        )
+
+        df = df.drop(columns=["container_id_map"])
+
     return df
 
 # -----------------------------------------------------------------------------
@@ -808,24 +792,6 @@ def get_port_eta_doc_risk(df):
 def get_eta_performance(df_exec, bookings):
 
     import pandas as pd
-import re
-import numpy as np
-
-# -----------------------------------------------------------------------------
-# Clean container IDs – keep only ISO‑6346 codes (4 letters + 7 digits).
-# Returns NaN for anything that does not match the pattern.
-# -----------------------------------------------------------------------------
-def clean_container_strict(val):
-    if pd.isna(val) or str(val).strip() == "":
-        return np.nan
-    val = str(val).upper().strip()
-    # Exclude common non‑container markers
-    for pat in ["TRUCK", "L&S", "R&L"]:
-        if pat in val:
-            return np.nan
-    match = re.search(r"\b[A-Z]{4}[0-9]{7}\b", val)
-    return match.group(0) if match else np.nan
-
 
     # -----------------------------
     # STEP 1 — LATEST BOOKING PER CONTAINER
@@ -1020,24 +986,6 @@ def get_pos_without_container(bookings):
 def get_container_data_issues(df_exec):
 
     import pandas as pd
-import re
-import numpy as np
-
-# -----------------------------------------------------------------------------
-# Clean container IDs – keep only ISO‑6346 codes (4 letters + 7 digits).
-# Returns NaN for anything that does not match the pattern.
-# -----------------------------------------------------------------------------
-def clean_container_strict(val):
-    if pd.isna(val) or str(val).strip() == "":
-        return np.nan
-    val = str(val).upper().strip()
-    # Exclude common non‑container markers
-    for pat in ["TRUCK", "L&S", "R&L"]:
-        if pat in val:
-            return np.nan
-    match = re.search(r"\b[A-Z]{4}[0-9]{7}\b", val)
-    return match.group(0) if match else np.nan
-
 
     df = df_exec.copy()
 
@@ -1226,24 +1174,6 @@ def clean_container_strict(val):
 def get_lfd_risk(df_exec, days_ahead=3):
 
     import pandas as pd
-import re
-import numpy as np
-
-# -----------------------------------------------------------------------------
-# Clean container IDs – keep only ISO‑6346 codes (4 letters + 7 digits).
-# Returns NaN for anything that does not match the pattern.
-# -----------------------------------------------------------------------------
-def clean_container_strict(val):
-    if pd.isna(val) or str(val).strip() == "":
-        return np.nan
-    val = str(val).upper().strip()
-    # Exclude common non‑container markers
-    for pat in ["TRUCK", "L&S", "R&L"]:
-        if pat in val:
-            return np.nan
-    match = re.search(r"\b[A-Z]{4}[0-9]{7}\b", val)
-    return match.group(0) if match else np.nan
-
 
     df = df_exec.copy()
 
@@ -1344,3 +1274,373 @@ def get_arriving_invoice_risk(df_exec, invoice_compliance, days=3):
     risk = df[df["invoice_ready"] != True].copy()
 
     return risk
+
+
+# =============================================================================
+# NEW: OPERATIONAL INVOICE DASHBOARD LOGIC
+# Replaces the static invoice_compliance matrix with a shipment-driven
+# operational dashboard: Missing Bills / Pending Bills / Invoice Complete
+# =============================================================================
+
+import re
+from rapidfuzz import process, fuzz
+
+
+# -----------------------------------------------------------------------------
+# HELPER: Normalize bill type (reused from build_dashboard_data.py)
+# -----------------------------------------------------------------------------
+VALID_TYPES = ["OF", "CUSTOMS", "DUTY", "DRAYAGE"]
+
+def normalize_bill_type(text):
+    text = str(text).strip().upper() if pd.notna(text) else ""
+    if text == "":
+        return None
+    if text == "OF" or "OCEAN" in text or "AIR FREIGHT" in text or "AIRFREIGHT" in text:
+        return "OF"
+    if "CUSTOM" in text:
+        return "CUSTOMS"
+    if "DUTY" in text:
+        return "DUTY"
+    if "DRAY" in text:
+        return "DRAYAGE"
+    # Fuzzy fallback for typos
+    match = process.extractOne(text, VALID_TYPES, scorer=fuzz.ratio)
+    if match and match[1] >= 85:
+        return match[0]
+    return None
+
+
+# -----------------------------------------------------------------------------
+# HELPER: Detect pending invoice placeholders
+# Reuses the same pattern logic from QC snapshot (build_dashboard_data.py lines 646-648)
+# -----------------------------------------------------------------------------
+PENDING_RE = re.compile(
+    r"^(PENDING|PENDNG|PENDIG|PENDIN|PEND|PENING|POSTED)$",
+    re.IGNORECASE
+)
+
+def _is_pending_invoice(bill_inv):
+    if pd.isna(bill_inv):
+        return False
+    val = str(bill_inv).strip().upper()
+    return bool(PENDING_RE.match(val))
+
+
+# -----------------------------------------------------------------------------
+# CORE: Build per-container invoice status matrix for arriving shipments
+# -----------------------------------------------------------------------------
+def build_invoice_status_matrix(
+    df_exec: pd.DataFrame,
+    bills_df: pd.DataFrame,
+    gl_bills_df: pd.DataFrame,
+    shipment_mapping_df: pd.DataFrame,
+    days_ahead: int = 2
+) -> pd.DataFrame:
+    """
+    Build a per-container invoice status matrix for containers arriving
+    within the next `days_ahead` days (today through days_ahead inclusive).
+
+    Returns DataFrame with one row per container+PO in the arrival window:
+    - container, sipl, po_number, port_eta, supplier, final_destination
+    - OF_status, CUSTOMS_status, DUTY_status, DRAYAGE_status (values: 'Actual', 'Pending', 'Missing')
+    - missing_bills (comma-separated)
+    - pending_bills (comma-separated)
+    - invoice_complete (bool)
+    - days_until_arrival (int)
+    - arrival_status ('Today', 'Approaching', 'Past ETA')
+    - invoice_completion_date (datetime if complete, else NaT)
+    """
+    REQUIRED = ["OF", "CUSTOMS", "DUTY", "DRAYAGE"]
+    today = pd.Timestamp.today().normalize()
+    cutoff_date = today + pd.Timedelta(days=days_ahead)
+
+    # -------------------------------------------------------------------------
+    # 1. GET ARRIVING CONTAINERS FROM EXECUTION LAYER
+    # -------------------------------------------------------------------------
+    df = df_exec[df_exec["port_eta"].notna()].copy()
+    df["port_eta"] = pd.to_datetime(df["port_eta"], errors="coerce")
+
+    # Filter to shipment window: Today through days_ahead (inclusive)
+    df = df[
+        (df["port_eta"] >= today) &
+        (df["port_eta"] <= cutoff_date)
+    ].copy()
+
+    if df.empty:
+        cols = ["container", "sipl", "po_number", "port_eta", "supplier", "final_destination",
+                "OF_status", "CUSTOMS_status", "DUTY_status", "DRAYAGE_status",
+                "missing_bills", "pending_bills", "invoice_complete",
+                "days_until_arrival", "arrival_status", "invoice_completion_date"]
+        return pd.DataFrame(columns=cols)
+
+    # Arrival metadata
+    df["days_until_arrival"] = (df["port_eta"].dt.normalize() - today).dt.days
+    df["arrival_status"] = "Approaching"
+    df.loc[df["port_eta"].dt.normalize() == today, "arrival_status"] = "Today"
+    df.loc[df["port_eta"] < today, "arrival_status"] = "Past ETA"
+
+    # Ensure key columns exist
+    for col in ["container_id", "sipl", "po_number", "supplier", "final_destination"]:
+        if col not in df.columns:
+            df[col] = pd.NA
+
+    # Use container_id as primary container identifier
+    df = df.rename(columns={"container_id": "container"})
+
+    # -------------------------------------------------------------------------
+    # 2. BUILD CONTAINER-LEVEL BILL INVENTORY FROM BILLS + GL
+    # Mirrors build_dashboard_data.py Step 3 logic
+    # -------------------------------------------------------------------------
+
+    # A. Build SIPL -> Container master from bills (with note extraction fallback)
+    master = (
+        bills_df[bills_df["sipl_inv"].notna() & bills_df["container"].notna()]
+        [["sipl_inv", "container"]]
+        .drop_duplicates()
+    )
+    sipl_set = set(master["sipl_inv"].astype(str).str.upper())
+    container_set = set(master["container"].astype(str).str.upper())
+
+    def extract_sipl(note):
+        if pd.isna(note):
+            return None
+        candidates = re.findall(r"(\d{5,6}[A-Z]?)", str(note).upper())
+        matches = [x for x in candidates if x in sipl_set]
+        return matches[0] if matches else None
+
+    def extract_container(note):
+        if pd.isna(note):
+            return None
+        candidates = re.findall(r"([A-Z]{4}\d{7})", str(note).upper())
+        matches = [x for x in candidates if x in container_set]
+        return matches[0] if matches else None
+
+    bills_wk = bills_df.copy()
+    bills_wk["sipl_from_notes"] = bills_wk["notes"].apply(extract_sipl)
+    bills_wk["container_from_notes"] = bills_wk["notes"].apply(extract_container)
+
+    bills_wk["sipl_final"] = bills_wk["sipl_inv"]
+    mask = bills_wk["sipl_final"].isna() & bills_wk["sipl_from_notes"].notna()
+    bills_wk.loc[mask, "sipl_final"] = bills_wk.loc[mask, "sipl_from_notes"]
+
+    bills_wk["container_final"] = bills_wk["container"]
+    mask = bills_wk["container_final"].isna() & bills_wk["container_from_notes"].notna()
+    bills_wk.loc[mask, "container_final"] = bills_wk.loc[mask, "container_from_notes"]
+
+    container_map = master.drop_duplicates("sipl_inv").set_index("sipl_inv")["container"]
+    bills_wk["container_from_sipl"] = bills_wk["sipl_final"].map(container_map)
+    mask = bills_wk["container_final"].isna() & bills_wk["container_from_sipl"].notna()
+    bills_wk.loc[mask, "container_final"] = bills_wk.loc[mask, "container_from_sipl"]
+
+    # Keep only container-linked bills
+    container_bills = bills_wk[bills_wk["container_final"].notna()].copy()
+    container_bills = container_bills.rename(
+        columns={"sipl_final": "sipl", "container_final": "container"}
+    )
+
+    # B. Merge with GL bills to get description_clean
+    gl_wk = gl_bills_df[gl_bills_df["type"] == "Bill"].copy()
+    gl_wk["description_clean"] = gl_wk["description"].astype(str).str.upper().str.strip()
+    gl_wk.loc[
+        gl_wk["description_clean"].str.contains(r"PO", case=False, na=False),
+        "description_clean"
+    ] = pd.NA
+    gl_wk["description_clean"] = gl_wk["description_clean"].replace({
+        "OCEAN FREIGHT": "OF",
+        "AIR FREIGHT": "OF",
+        "MIS": "MISC"
+    })
+    gl_wk = gl_wk[gl_wk["description_clean"].notna()].copy()
+
+    # Merge bills -> GL on invoice number
+    matched = container_bills.merge(
+        gl_wk,
+        left_on="bill_inv",
+        right_on="invoice",
+        how="left"
+    )
+
+    # C. Merge shipment mapping for PO number
+    sm = shipment_mapping_df.rename(
+        columns={"container_id": "container", "sipl_number": "sipl"}
+    )[["container", "sipl", "po_number"]].drop_duplicates()
+    sm["container"] = sm["container"].astype(str).str.upper().str.strip()
+    sm["sipl"] = sm["sipl"].astype(str).str.upper().str.strip()
+
+    matched = matched.merge(sm, on=["container", "sipl"], how="left")
+
+    # D. Normalize bill types and detect pending
+    matched["bill_type"] = matched["description_clean"].apply(normalize_bill_type)
+    matched["is_pending"] = matched["bill_inv"].apply(_is_pending_invoice)
+
+    # Keep only valid bill types
+    compliance_bills = matched[matched["bill_type"].notna()].copy()
+
+    # -------------------------------------------------------------------------
+    # 3. BUILD PER-CONTAINER STATUS MATRIX
+    # -------------------------------------------------------------------------
+    # For each container+PO from execution layer, determine status of each bill type
+    exec_containers = df[["container", "po_number", "sipl", "port_eta",
+                          "supplier", "final_destination", "days_until_arrival",
+                          "arrival_status"]].drop_duplicates()
+
+    status_rows = []
+
+    for _, row in exec_containers.iterrows():
+        container = row["container"]
+        po = row["po_number"]
+
+        # Get bills for this container+PO
+        cb = compliance_bills[
+            (compliance_bills["container"] == container) &
+            (compliance_bills["po_number"] == po)
+        ]
+
+        status = {"container": container, "po_number": po}
+
+        # Add execution metadata
+        for col in ["sipl", "port_eta", "supplier", "final_destination",
+                    "days_until_arrival", "arrival_status"]:
+            status[col] = row[col]
+
+        missing_list = []
+        pending_list = []
+        actual_dates = []
+
+        for bill_type in REQUIRED:
+            type_bills = cb[cb["bill_type"] == bill_type]
+
+            if type_bills.empty:
+                status[f"{bill_type}_status"] = "Missing"
+                missing_list.append(bill_type)
+            else:
+                pending_bills = type_bills[type_bills["is_pending"]]
+                actual_bills = type_bills[~type_bills["is_pending"]]
+
+                if not pending_bills.empty:
+                    status[f"{bill_type}_status"] = "Pending"
+                    pending_list.append(bill_type)
+                elif not actual_bills.empty:
+                    status[f"{bill_type}_status"] = "Actual"
+                    # Track completion date (latest actual invoice date)
+                    if "invoice_dt" in actual_bills.columns:
+                        actual_dates.extend(
+                            pd.to_datetime(actual_bills["invoice_dt"], errors="coerce").dropna().tolist()
+                        )
+                else:
+                    status[f"{bill_type}_status"] = "Missing"
+                    missing_list.append(bill_type)
+
+        status["missing_bills"] = ", ".join(missing_list) if missing_list else ""
+        status["pending_bills"] = ", ".join(pending_list) if pending_list else ""
+        status["invoice_complete"] = (len(missing_list) == 0 and len(pending_list) == 0)
+
+        if actual_dates:
+            status["invoice_completion_date"] = max(actual_dates)
+        else:
+            status["invoice_completion_date"] = pd.NaT
+
+        status_rows.append(status)
+
+    result = pd.DataFrame(status_rows)
+
+    # Ensure all required columns exist
+    for bill_type in REQUIRED:
+        if f"{bill_type}_status" not in result.columns:
+            result[f"{bill_type}_status"] = "Missing"
+
+    return result
+
+
+# -----------------------------------------------------------------------------
+# CLASSIFY CONTAINERS INTO THREE MUTUALLY EXCLUSIVE TABS
+# Priority: Pending -> Missing -> Complete
+# -----------------------------------------------------------------------------
+def classify_container_invoice_status(status_matrix: pd.DataFrame) -> tuple:
+    """
+    Classify each container into exactly ONE of three categories:
+    1. PENDING - has at least one pending bill (work initiated)
+    2. MISSING - no pending bills, but has at least one missing bill
+    3. COMPLETE - all four bills are Actual
+
+    Returns: (pending_df, missing_df, complete_df)
+    """
+    if status_matrix.empty:
+        empty_cols = status_matrix.columns.tolist() if not status_matrix.empty else [
+            "container", "sipl", "po_number", "port_eta", "supplier", "final_destination",
+            "OF_status", "CUSTOMS_status", "DUTY_status", "DRAYAGE_status",
+            "missing_bills", "pending_bills", "invoice_complete",
+            "days_until_arrival", "arrival_status", "invoice_completion_date"
+        ]
+        empty_df = pd.DataFrame(columns=empty_cols)
+        return empty_df, empty_df, empty_df
+
+    df = status_matrix.copy()
+
+    # Priority 1: Pending (has any pending bill)
+    pending_mask = df["pending_bills"] != ""
+    pending_df = df[pending_mask].copy()
+
+    # Priority 2: Missing (no pending, but has missing)
+    missing_mask = (df["pending_bills"] == "") & (df["missing_bills"] != "")
+    missing_df = df[missing_mask].copy()
+
+    # Priority 3: Complete (no pending, no missing)
+    complete_mask = (df["pending_bills"] == "") & (df["missing_bills"] == "")
+    complete_df = df[complete_mask].copy()
+
+    # Verify mutual exclusivity and completeness
+    total_classified = len(pending_df) + len(missing_df) + len(complete_df)
+    assert total_classified == len(df), "Classification mismatch!"
+
+    return pending_df, missing_df, complete_df
+
+
+# -----------------------------------------------------------------------------
+# MAIN FUNCTION: GET OPERATIONAL INVOICE DASHBOARD DATA
+# -----------------------------------------------------------------------------
+def get_operational_invoice_dashboard(
+    df_exec: pd.DataFrame,
+    bills_df: pd.DataFrame,
+    gl_bills_df: pd.DataFrame,
+    shipment_mapping_df: pd.DataFrame,
+    days_ahead: int = 2
+) -> dict:
+    """
+    Main entry point for the Invoice Compliance operational dashboard.
+
+    Returns dict with three DataFrames:
+    - 'missing_bills': Containers arriving in window with missing bills (no pending)
+    - 'pending_bills': Containers arriving in window with pending bills
+    - 'invoice_complete': Containers arriving in window with all 4 bills received
+
+    Also includes 'kpis' dict with summary metrics.
+    """
+    # Build the status matrix
+    status_matrix = build_invoice_status_matrix(
+        df_exec, bills_df, gl_bills_df, shipment_mapping_df, days_ahead
+    )
+
+    # Classify into three tabs
+    pending_df, missing_df, complete_df = classify_container_invoice_status(status_matrix)
+
+    # Calculate KPIs
+    total_containers = len(status_matrix)
+    kpis = {
+        "containers_arriving": total_containers,
+        "invoice_complete": len(complete_df),
+        "containers_missing_bills": len(missing_df),
+        "pending_bills": len(pending_df),
+        "invoice_completion_pct": round(len(complete_df) / total_containers * 100, 1) if total_containers > 0 else 0,
+        "avg_missing_per_container": round(
+            status_matrix["missing_bills"].apply(lambda x: len(x.split(", ")) if x else 0).mean(), 1
+        ) if total_containers > 0 else 0,
+    }
+
+    return {
+        "missing_bills": missing_df,
+        "pending_bills": pending_df,
+        "invoice_complete": complete_df,
+        "kpis": kpis,
+        "status_matrix": status_matrix  # full matrix for debugging/export
+    }
