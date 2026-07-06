@@ -12,20 +12,22 @@ from logic_cloud import (
     build_execution_master,
     get_containers_on_water,
     get_arriving_today,
-    get_current_week_arrivals,
     get_next_7_days_arrivals,
     get_location_reached,
     get_location_next_7_days,
     get_port_eta_doc_risk,
     get_eta_performance,
-    get_pos_received_in_range,
-    get_pos_approved_in_range,
     get_rollover_summary,
     get_container_data_issues,
     get_lfd_risk,
-    get_arriving_invoice_risk,
     get_operational_invoice_dashboard,
 )
+# NOTE: get_current_week_arrivals, get_pos_received_in_range,
+# get_pos_approved_in_range, and get_arriving_invoice_risk were previously
+# imported here but never called — booking KPIs are computed inline in the
+# Booking tab below, and get_arriving_invoice_risk has been superseded by
+# get_operational_invoice_dashboard(). Removed to keep the import list
+# honest about what this file actually uses.
 
 
 
@@ -902,7 +904,7 @@ with tab3:
         bills_df=bills_raw,
         gl_bills_df=gl_bills_raw,
         shipment_mapping_df=shipment_mapping_raw,
-        days_ahead=2  # Today + 2 = 3 days window
+        days_ahead=3  # Today, Tomorrow, Day+2, Day+3 — matches logic_cloud default
     )
 
     missing_df = dashboard["missing_bills"]

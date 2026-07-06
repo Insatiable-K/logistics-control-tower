@@ -39,6 +39,11 @@ from lxml import etree
 from pathlib import Path
 from datetime import datetime
 
+# Shared, single-source-of-truth bill matching/normalization pipeline.
+# logic_cloud.py has no SQL dependency, so importing it here does not
+# reintroduce the SQL round-trip this script exists to avoid.
+from logic_cloud import build_compliance_bills, VALID_TYPES
+
 # =============================================================================
 # FILE PATHS  — adjust if folder locations change
 # =============================================================================
@@ -460,142 +465,20 @@ print("=" * 60)
 
 invoice_compliance = pd.DataFrame()
 
+# NOTE: The bill matching pipeline (SIPL/container recovery from Notes,
+# bills->GL merge, PO lookup, bill-type normalization, pending detection)
+# used to be duplicated here AND inside logic_cloud.py's operational
+# dashboard. It now lives in exactly one place — build_compliance_bills()
+# in logic_cloud.py — so this static sheet and the live app_cloud.py
+# dashboard can never disagree about what counts as OF/CUSTOMS/DUTY/DRAYAGE
+# or what counts as "pending."
 try:
-    from rapidfuzz import process, fuzz
-
-    # -------------------------------------------------------------------------
-    # BUILD SIPL ↔ CONTAINER MASTER FROM BILLS
-    # -------------------------------------------------------------------------
-    master = (
-        bills[bills["sipl_inv"].notna() & bills["container"].notna()]
-        [["sipl_inv", "container"]]
-        .drop_duplicates()
-    )
-
-    sipl_set      = set(master["sipl_inv"].astype(str).str.upper())
-    container_set = set(master["container"].astype(str).str.upper())
-
-    # -------------------------------------------------------------------------
-    # EXTRACT SIPL / CONTAINER FROM NOTES (FALLBACK)
-    # -------------------------------------------------------------------------
-    def extract_sipl(note):
-        if pd.isna(note):
-            return None
-        candidates = re.findall(r"(\d{5,6}[A-Z]?)", str(note).upper())
-        matches = [x for x in candidates if x in sipl_set]
-        return matches[0] if matches else None
-
-    def extract_container(note):
-        if pd.isna(note):
-            return None
-        candidates = re.findall(r"([A-Z]{4}\d{7})", str(note).upper())
-        matches = [x for x in candidates if x in container_set]
-        return matches[0] if matches else None
-
-    bills_wk = bills.copy()
-    bills_wk["sipl_from_notes"]      = bills_wk["notes"].apply(extract_sipl)
-    bills_wk["container_from_notes"] = bills_wk["notes"].apply(extract_container)
-
-    # Coalesce sipl
-    bills_wk["sipl_final"] = bills_wk["sipl_inv"]
-    mask = bills_wk["sipl_final"].isna() & bills_wk["sipl_from_notes"].notna()
-    bills_wk.loc[mask, "sipl_final"] = bills_wk.loc[mask, "sipl_from_notes"]
-
-    # Coalesce container
-    bills_wk["container_final"] = bills_wk["container"]
-    mask = bills_wk["container_final"].isna() & bills_wk["container_from_notes"].notna()
-    bills_wk.loc[mask, "container_final"] = bills_wk.loc[mask, "container_from_notes"]
-
-    # Fill container from SIPL master
-    container_map = master.drop_duplicates("sipl_inv").set_index("sipl_inv")["container"]
-    bills_wk["container_from_sipl"] = bills_wk["sipl_final"].map(container_map)
-    mask = bills_wk["container_final"].isna() & bills_wk["container_from_sipl"].notna()
-    bills_wk.loc[mask, "container_final"] = bills_wk.loc[mask, "container_from_sipl"]
-
-    # -------------------------------------------------------------------------
-    # KEEP CONTAINER-LINKED BILLS ONLY
-    # -------------------------------------------------------------------------
-    container_bills = bills_wk[bills_wk["container_final"].notna()].copy()
-    container_bills = container_bills.drop(
-        columns=["supplier", "sipl_inv", "container", "notes",
-                 "sipl_from_notes", "container_from_notes", "container_from_sipl"],
-        errors="ignore"
-    )
-    container_bills = container_bills.rename(
-        columns={"sipl_final": "sipl", "container_final": "container"}
-    )
-
-    # -------------------------------------------------------------------------
-    # FILTER GL TO BILL TYPE ONLY + CLEAN DESCRIPTION
-    # -------------------------------------------------------------------------
-    gl_wk = gl_bills[gl_bills["type"] == "Bill"].copy()
-    gl_wk["description_clean"] = gl_wk["description"].astype(str).str.upper().str.strip()
-
-    # Remove PO references
-    gl_wk.loc[
-        gl_wk["description_clean"].str.contains(r"PO", case=False, na=False),
-        "description_clean"
-    ] = pd.NA
-
-    gl_wk["description_clean"] = gl_wk["description_clean"].replace({
-        "OCEAN FREIGHT": "OF",
-        "AIR FREIGHT": "OF",
-        "MIS": "MISC"
-    })
-    gl_wk = gl_wk[gl_wk["description_clean"].notna()].copy()
-
-    # -------------------------------------------------------------------------
-    # MERGE BILLS → GL
-    # -------------------------------------------------------------------------
-    matched = container_bills.merge(
-        gl_wk,
-        left_on="bill_inv",
-        right_on="invoice",
-        how="left"
-    )
-
-    # -------------------------------------------------------------------------
-    # MERGE → PO NUMBER (FROM SHIPMENT MAPPING)
-    # -------------------------------------------------------------------------
-    sm = shipment_mapping.rename(
-        columns={"container_id": "container", "sipl_number": "sipl"}
-    )[["container", "sipl", "po_number"]].drop_duplicates()
-    sm["container"] = sm["container"].astype(str).str.upper().str.strip()
-    sm["sipl"]      = sm["sipl"].astype(str).str.upper().str.strip()
-
-    matched = matched.merge(sm, on=["container", "sipl"], how="left")
-
-    # -------------------------------------------------------------------------
-    # NORMALIZE BILL TYPES  (all 4 categories: OF / CUSTOMS / DUTY / DRAYAGE)
-    # -------------------------------------------------------------------------
-    VALID_TYPES = ["OF", "CUSTOMS", "DUTY", "DRAYAGE"]
-
-    def normalize_bill_type(text):
-        text = str(text).strip().upper() if pd.notna(text) else ""
-        if text == "":
-            return None
-        if text == "OF" or "OCEAN" in text or "AIR FREIGHT" in text or "AIRFREIGHT" in text:
-            return "OF"
-        if "CUSTOM" in text:
-            return "CUSTOMS"
-        if "DUTY" in text:
-            return "DUTY"
-        if "DRAY" in text:
-            return "DRAYAGE"
-        # Fuzzy fallback for typos
-        match = process.extractOne(text, VALID_TYPES, scorer=fuzz.ratio)
-        if match and match[1] >= 85:
-            return match[0]
-        return None
-
-    matched["bill_type"] = matched["description_clean"].apply(normalize_bill_type)
-
-    compliance_bills = matched[matched["bill_type"].notna()].copy()
+    compliance_bills = build_compliance_bills(bills, gl_bills, shipment_mapping)
 
     # -------------------------------------------------------------------------
     # BUILD COMPLIANCE MATRIX  (pivot: container × PO → which bills exist)
     # -------------------------------------------------------------------------
-    REQUIRED = ["OF", "CUSTOMS", "DUTY", "DRAYAGE"]
+    REQUIRED = VALID_TYPES  # ["OF", "CUSTOMS", "DUTY", "DRAYAGE"]
 
     invoice_matrix = (
         compliance_bills
@@ -630,8 +513,8 @@ try:
         print(f"  Missing {b:<8}: {missing_count:,}")
 
 except ImportError:
-    print("  WARNING: rapidfuzz not installed — invoice_compliance sheet will be empty.")
-    print("           Run: pip install rapidfuzz")
+    print("  WARNING: rapidfuzz not installed (required by logic_cloud.build_compliance_bills)")
+    print("           — invoice_compliance sheet will be empty. Run: pip install rapidfuzz")
 except Exception as e:
     print(f"  WARNING: Invoice compliance build failed — sheet will be empty.\n  {e}")
 

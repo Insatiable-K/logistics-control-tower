@@ -1212,6 +1212,14 @@ def get_lfd_risk(df_exec, days_ahead=3):
 # -----------------------------------------------------------------------------
 # ARRIVING / OUTSTANDING CONTAINERS WITH INVOICE ISSUES
 #
+# ⚠ SUPERSEDED: app_cloud.py no longer calls this. The operational invoice
+# dashboard now goes through get_operational_invoice_dashboard(), which
+# classifies containers into exactly one of Pending/Missing/Complete and
+# shares its bill matching with build_dashboard_data.py via
+# build_compliance_bills(). This function is kept only in case something
+# outside this repo still imports it — new work should not build on it.
+# Safe to delete once confirmed unused elsewhere.
+#
 # Returns ONE dataframe with ALL containers that have port_eta set and at least
 # one bill issue (missing OR pending).  Callers filter by:
 #   arrival_status == "Approaching"  → next `days` days
@@ -1326,6 +1334,138 @@ def _is_pending_invoice(bill_inv):
     return bool(PENDING_RE.match(val))
 
 
+# =============================================================================
+# SINGLE SOURCE OF TRUTH — BILL MATCHING & NORMALIZATION PIPELINE
+# =============================================================================
+# This function replaces two previously-duplicated copies of the same logic
+# (one inline in build_dashboard_data.py Step 3, one inline in the old
+# build_invoice_status_matrix). Both the static invoice_compliance sheet and
+# the operational Missing/Pending/Complete dashboard now call this ONE
+# function, so bill-type normalization and SIPL/container recovery can never
+# drift out of sync between the two.
+#
+# Do not re-implement this matching logic anywhere else — import it instead.
+# =============================================================================
+def build_compliance_bills(
+    bills_df: pd.DataFrame,
+    gl_bills_df: pd.DataFrame,
+    shipment_mapping_df: pd.DataFrame
+) -> pd.DataFrame:
+    """
+    Links raw Bills -> GL Account Registers -> Shipment Mapping, recovers
+    missing SIPL/Container references from free-text Notes, and normalizes
+    each matched bill into one of the four required freight categories
+    (OF / CUSTOMS / DUTY / DRAYAGE).
+
+    Returns one row per matched bill line with columns:
+        container, po_number, sipl, bill_type, is_pending, bill_inv,
+        invoice_dt (if present on bills_df)
+
+    Callers (build_dashboard_data.py, build_invoice_status_matrix) pivot or
+    filter this shared result — they should not recompute the matching.
+    """
+
+    # -------------------------------------------------------------------
+    # A. Build SIPL -> Container master from bills (source of truth for
+    #    recovering references mentioned only in free-text Notes)
+    # -------------------------------------------------------------------
+    master = (
+        bills_df[bills_df["sipl_inv"].notna() & bills_df["container"].notna()]
+        [["sipl_inv", "container"]]
+        .drop_duplicates()
+    )
+    sipl_set = set(master["sipl_inv"].astype(str).str.upper())
+    container_set = set(master["container"].astype(str).str.upper())
+
+    def extract_sipl(note):
+        if pd.isna(note):
+            return None
+        candidates = re.findall(r"(\d{5,6}[A-Z]?)", str(note).upper())
+        matches = [x for x in candidates if x in sipl_set]
+        return matches[0] if matches else None
+
+    def extract_container(note):
+        if pd.isna(note):
+            return None
+        candidates = re.findall(r"([A-Z]{4}\d{7})", str(note).upper())
+        matches = [x for x in candidates if x in container_set]
+        return matches[0] if matches else None
+
+    bills_wk = bills_df.copy()
+    notes_col = bills_wk["notes"] if "notes" in bills_wk.columns else pd.Series(pd.NA, index=bills_wk.index)
+    bills_wk["sipl_from_notes"] = notes_col.apply(extract_sipl)
+    bills_wk["container_from_notes"] = notes_col.apply(extract_container)
+
+    bills_wk["sipl_final"] = bills_wk["sipl_inv"]
+    mask = bills_wk["sipl_final"].isna() & bills_wk["sipl_from_notes"].notna()
+    bills_wk.loc[mask, "sipl_final"] = bills_wk.loc[mask, "sipl_from_notes"]
+
+    bills_wk["container_final"] = bills_wk["container"]
+    mask = bills_wk["container_final"].isna() & bills_wk["container_from_notes"].notna()
+    bills_wk.loc[mask, "container_final"] = bills_wk.loc[mask, "container_from_notes"]
+
+    container_map = master.drop_duplicates("sipl_inv").set_index("sipl_inv")["container"]
+    bills_wk["container_from_sipl"] = bills_wk["sipl_final"].map(container_map)
+    mask = bills_wk["container_final"].isna() & bills_wk["container_from_sipl"].notna()
+    bills_wk.loc[mask, "container_final"] = bills_wk.loc[mask, "container_from_sipl"]
+
+    # Keep only container-linked bills
+    container_bills = bills_wk[bills_wk["container_final"].notna()].copy()
+    drop_helper_cols = ["supplier", "sipl_inv", "container", "notes",
+                         "sipl_from_notes", "container_from_notes", "container_from_sipl"]
+    container_bills = container_bills.drop(
+        columns=[c for c in drop_helper_cols if c in container_bills.columns],
+        errors="ignore"
+    )
+    container_bills = container_bills.rename(
+        columns={"sipl_final": "sipl", "container_final": "container"}
+    )
+
+    # -------------------------------------------------------------------
+    # B. Merge with GL bills to get description_clean
+    # -------------------------------------------------------------------
+    gl_wk = gl_bills_df[gl_bills_df["type"] == "Bill"].copy()
+    gl_wk["description_clean"] = gl_wk["description"].astype(str).str.upper().str.strip()
+    gl_wk.loc[
+        gl_wk["description_clean"].str.contains(r"PO", case=False, na=False),
+        "description_clean"
+    ] = pd.NA
+    gl_wk["description_clean"] = gl_wk["description_clean"].replace({
+        "OCEAN FREIGHT": "OF",
+        "AIR FREIGHT": "OF",
+        "MIS": "MISC"
+    })
+    gl_wk = gl_wk[gl_wk["description_clean"].notna()].copy()
+
+    matched = container_bills.merge(
+        gl_wk,
+        left_on="bill_inv",
+        right_on="invoice",
+        how="left"
+    )
+
+    # -------------------------------------------------------------------
+    # C. Merge shipment mapping for PO number
+    # -------------------------------------------------------------------
+    sm = shipment_mapping_df.rename(
+        columns={"container_id": "container", "sipl_number": "sipl"}
+    )[["container", "sipl", "po_number"]].drop_duplicates()
+    sm["container"] = sm["container"].astype(str).str.upper().str.strip()
+    sm["sipl"] = sm["sipl"].astype(str).str.upper().str.strip()
+
+    matched = matched.merge(sm, on=["container", "sipl"], how="left")
+
+    # -------------------------------------------------------------------
+    # D. Normalize bill types and detect pending
+    # -------------------------------------------------------------------
+    matched["bill_type"] = matched["description_clean"].apply(normalize_bill_type)
+    matched["is_pending"] = matched["bill_inv"].apply(_is_pending_invoice)
+
+    compliance_bills = matched[matched["bill_type"].notna()].copy()
+
+    return compliance_bills
+
+
 # -----------------------------------------------------------------------------
 # CORE: Build per-container invoice status matrix for arriving shipments
 # -----------------------------------------------------------------------------
@@ -1334,7 +1474,7 @@ def build_invoice_status_matrix(
     bills_df: pd.DataFrame,
     gl_bills_df: pd.DataFrame,
     shipment_mapping_df: pd.DataFrame,
-    days_ahead: int = 2
+    days_ahead: int = 3
 ) -> pd.DataFrame:
     """
     Build a per-container invoice status matrix for containers arriving
@@ -1389,92 +1529,11 @@ def build_invoice_status_matrix(
 
     # -------------------------------------------------------------------------
     # 2. BUILD CONTAINER-LEVEL BILL INVENTORY FROM BILLS + GL
-    # Mirrors build_dashboard_data.py Step 3 logic
+    # Delegates to build_compliance_bills() — the single shared matching
+    # pipeline also used by build_dashboard_data.py's invoice_compliance
+    # sheet. Do not duplicate this logic here.
     # -------------------------------------------------------------------------
-
-    # A. Build SIPL -> Container master from bills (with note extraction fallback)
-    master = (
-        bills_df[bills_df["sipl_inv"].notna() & bills_df["container"].notna()]
-        [["sipl_inv", "container"]]
-        .drop_duplicates()
-    )
-    sipl_set = set(master["sipl_inv"].astype(str).str.upper())
-    container_set = set(master["container"].astype(str).str.upper())
-
-    def extract_sipl(note):
-        if pd.isna(note):
-            return None
-        candidates = re.findall(r"(\d{5,6}[A-Z]?)", str(note).upper())
-        matches = [x for x in candidates if x in sipl_set]
-        return matches[0] if matches else None
-
-    def extract_container(note):
-        if pd.isna(note):
-            return None
-        candidates = re.findall(r"([A-Z]{4}\d{7})", str(note).upper())
-        matches = [x for x in candidates if x in container_set]
-        return matches[0] if matches else None
-
-    bills_wk = bills_df.copy()
-    bills_wk["sipl_from_notes"] = bills_wk["notes"].apply(extract_sipl)
-    bills_wk["container_from_notes"] = bills_wk["notes"].apply(extract_container)
-
-    bills_wk["sipl_final"] = bills_wk["sipl_inv"]
-    mask = bills_wk["sipl_final"].isna() & bills_wk["sipl_from_notes"].notna()
-    bills_wk.loc[mask, "sipl_final"] = bills_wk.loc[mask, "sipl_from_notes"]
-
-    bills_wk["container_final"] = bills_wk["container"]
-    mask = bills_wk["container_final"].isna() & bills_wk["container_from_notes"].notna()
-    bills_wk.loc[mask, "container_final"] = bills_wk.loc[mask, "container_from_notes"]
-
-    container_map = master.drop_duplicates("sipl_inv").set_index("sipl_inv")["container"]
-    bills_wk["container_from_sipl"] = bills_wk["sipl_final"].map(container_map)
-    mask = bills_wk["container_final"].isna() & bills_wk["container_from_sipl"].notna()
-    bills_wk.loc[mask, "container_final"] = bills_wk.loc[mask, "container_from_sipl"]
-
-    # Keep only container-linked bills
-    container_bills = bills_wk[bills_wk["container_final"].notna()].copy()
-    container_bills = container_bills.rename(
-        columns={"sipl_final": "sipl", "container_final": "container"}
-    )
-
-    # B. Merge with GL bills to get description_clean
-    gl_wk = gl_bills_df[gl_bills_df["type"] == "Bill"].copy()
-    gl_wk["description_clean"] = gl_wk["description"].astype(str).str.upper().str.strip()
-    gl_wk.loc[
-        gl_wk["description_clean"].str.contains(r"PO", case=False, na=False),
-        "description_clean"
-    ] = pd.NA
-    gl_wk["description_clean"] = gl_wk["description_clean"].replace({
-        "OCEAN FREIGHT": "OF",
-        "AIR FREIGHT": "OF",
-        "MIS": "MISC"
-    })
-    gl_wk = gl_wk[gl_wk["description_clean"].notna()].copy()
-
-    # Merge bills -> GL on invoice number
-    matched = container_bills.merge(
-        gl_wk,
-        left_on="bill_inv",
-        right_on="invoice",
-        how="left"
-    )
-
-    # C. Merge shipment mapping for PO number
-    sm = shipment_mapping_df.rename(
-        columns={"container_id": "container", "sipl_number": "sipl"}
-    )[["container", "sipl", "po_number"]].drop_duplicates()
-    sm["container"] = sm["container"].astype(str).str.upper().str.strip()
-    sm["sipl"] = sm["sipl"].astype(str).str.upper().str.strip()
-
-    matched = matched.merge(sm, on=["container", "sipl"], how="left")
-
-    # D. Normalize bill types and detect pending
-    matched["bill_type"] = matched["description_clean"].apply(normalize_bill_type)
-    matched["is_pending"] = matched["bill_inv"].apply(_is_pending_invoice)
-
-    # Keep only valid bill types
-    compliance_bills = matched[matched["bill_type"].notna()].copy()
+    compliance_bills = build_compliance_bills(bills_df, gl_bills_df, shipment_mapping_df)
 
     # -------------------------------------------------------------------------
     # 3. BUILD PER-CONTAINER STATUS MATRIX
@@ -1589,9 +1648,17 @@ def classify_container_invoice_status(status_matrix: pd.DataFrame) -> tuple:
     complete_mask = (df["pending_bills"] == "") & (df["missing_bills"] == "")
     complete_df = df[complete_mask].copy()
 
-    # Verify mutual exclusivity and completeness
+    # Verify mutual exclusivity and completeness.
+    # NOTE: intentionally a raised exception, not `assert` — asserts are
+    # stripped when Python runs with -O, which would silently disable this
+    # data-integrity guarantee in some deployment configs.
     total_classified = len(pending_df) + len(missing_df) + len(complete_df)
-    assert total_classified == len(df), "Classification mismatch!"
+    if total_classified != len(df):
+        raise ValueError(
+            f"Invoice classification mismatch: {total_classified} rows classified "
+            f"but {len(df)} rows in status matrix. A container may have landed in "
+            f"more than one category — check the pending/missing mask logic."
+        )
 
     return pending_df, missing_df, complete_df
 
@@ -1604,10 +1671,11 @@ def get_operational_invoice_dashboard(
     bills_df: pd.DataFrame,
     gl_bills_df: pd.DataFrame,
     shipment_mapping_df: pd.DataFrame,
-    days_ahead: int = 2
+    days_ahead: int = 3
 ) -> dict:
     """
     Main entry point for the Invoice Compliance operational dashboard.
+    days_ahead=3 covers the operational window: Today, Tomorrow, Day+2, Day+3.
 
     Returns dict with three DataFrames:
     - 'missing_bills': Containers arriving in window with missing bills (no pending)
