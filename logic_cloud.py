@@ -413,6 +413,19 @@ def build_execution_master(in_transit_df, inventory_intransit_df, shipment_mappi
     df_map = df_map[map_cols].rename(columns={"sipl_number": "sipl"})
     df_map = df_map.rename(columns={"container_id": "container_id_map"})
 
+    # shipment_mapping is unioned from several source pairings (open_po,
+    # bookings, supplier_invoices, bills) — the same SIPL can appear twice,
+    # once with a po_number filled in (e.g. from supplier_invoices) and
+    # once with po_number null (e.g. from bills.xls, which never carries a
+    # PO number). Left un-deduped, merging on "sipl" duplicates every
+    # execution row for that SIPL. Confirmed with real data: SIPL 155507C
+    # produced 2 identical rows in df_exec before this fix. Keep one row
+    # per SIPL, preferring whichever has a non-null po_number.
+    if "po_number" in df_map.columns:
+        df_map = df_map.sort_values("po_number", na_position="first").drop_duplicates(subset=["sipl"], keep="last")
+    else:
+        df_map = df_map.drop_duplicates(subset=["sipl"])
+
     df = df.merge(df_map, on="sipl", how="left")
     if "container_id_map" in df.columns:
         df["container_id"] = df["container_id"].fillna(df["container_id_map"])

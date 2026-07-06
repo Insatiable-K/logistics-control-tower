@@ -53,7 +53,7 @@ from utils import (
 # CONFIG
 # =============================================================================
 
-SOURCE_DIR = Path(__file__).parent / "source_files"
+SOURCE_DIR = Path(__file__).parent 
 OUTPUT_DIR = Path(__file__).parent / "data"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -62,16 +62,32 @@ TODAY = pd.Timestamp.today().normalize()
 REQUIRED_CATEGORIES = ["OF", "CUSTOMS", "DUTY", "DRAYAGE"]
 ACCESSORIAL_LABEL = "ACCESSORIAL"
 
+
+def resolve_existing_file(*candidates):
+    for candidate in candidates:
+        if candidate and Path(candidate).exists():
+            return Path(candidate)
+    return candidates[0] if candidates else None
+
+
 FILES = {
-    "open_po":            SOURCE_DIR / "Open_PO_List.xls",
-    "in_transit":         SOURCE_DIR / "InTransit_List_by_SIPL.xls",
-    "inventory_intransit": SOURCE_DIR / "Inventory_In_Transit__Detail_.xls",
-    "supplier_invoices":  SOURCE_DIR / "Supplier_Invoices.xls",
-    "account_1275":       SOURCE_DIR / "Account_Register__1275__Capitalized_Inventory_Freight.xls",
-    "account_1313":       SOURCE_DIR / "Account_Register__1313__Prepaid_Container_Freight.xls",
+    "open_po":            SOURCE_DIR / "Open PO List.xls",
+    "in_transit":         SOURCE_DIR / "In-Transit List by SIPL.xls",
+    "inventory_intransit": SOURCE_DIR / "Inventory In Transit - Detail .xls",
+    "supplier_invoices":  SOURCE_DIR / "Supplier Invoices.xls",
+    "account_1275":       SOURCE_DIR / "Account Register_ 1275 - Capitalized Inventory Freight.xls",
+    "account_1313":       SOURCE_DIR / "Account Register_ 1313 - Prepaid Container Freight.xls",
     "bills":              SOURCE_DIR / "Bills.xls",
-    "bookings":           SOURCE_DIR / "Bookings_Tracker.xlsx",
-    "freight_processed":  SOURCE_DIR / "Freight_Bills_Processed__2026.xlsm",
+    "bookings":           resolve_existing_file(
+        Path(r"C:\Users\Abhay\Architectural Surfaces\Mohan - Logistics\Logistics Tracker\Bookings Tracker.xlsx"),
+        SOURCE_DIR / "Bookings Tracker.xlsx",
+        SOURCE_DIR / "Bookings_Tracker.xlsx",
+    ),
+    "freight_processed":  resolve_existing_file(
+        Path(r"C:\Users\Abhay\Architectural Surfaces\Mohan - Logistics\Logistics Tracker\Freight Bills Processed - 2026.xlsm"),
+        SOURCE_DIR / "Freight Bills Processed - 2026.xlsm",
+        SOURCE_DIR / "Freight_Bills_Processed__2026.xlsm",
+    ),
 }
 
 print("=" * 70)
@@ -198,17 +214,22 @@ bills["is_pending"] = is_pending(bills["bill_inv"])
 print(f"  bills                : {bills.shape}  (pending: {bills['is_pending'].sum():,})")
 
 # --- Bookings Tracker (event-log grain) -------------------------------------
-bookings = standardize_columns(pd.read_excel(FILES["bookings"], sheet_name="Event_Log"))
-bookings = bookings.drop(columns=["notes"], errors="ignore")
-bookings["event_date"] = clean_date(bookings["event_date"])
-bookings["etd"] = clean_date(bookings["etd"])
-bookings["eta"] = clean_date(bookings["eta"])
-bookings["event_status"] = clean_text(bookings["event_status"]).str.upper()
-bookings["container_id"] = bookings["container_id"].apply(clean_container)
-for col in ["vessel", "reason", "updated_by"]:
-    if col in bookings.columns:
-        bookings[col] = clean_text(bookings[col])
-print(f"  bookings             : {bookings.shape}")
+bookings_path = FILES["bookings"]
+if bookings_path and bookings_path.exists():
+    bookings = standardize_columns(pd.read_excel(bookings_path, sheet_name="Event_Log"))
+    bookings = bookings.drop(columns=["notes"], errors="ignore")
+    bookings["event_date"] = clean_date(bookings["event_date"])
+    bookings["etd"] = clean_date(bookings["etd"])
+    bookings["eta"] = clean_date(bookings["eta"])
+    bookings["event_status"] = clean_text(bookings["event_status"]).str.upper()
+    bookings["container_id"] = bookings["container_id"].apply(clean_container)
+    for col in ["vessel", "reason", "updated_by"]:
+        if col in bookings.columns:
+            bookings[col] = clean_text(bookings[col])
+    print(f"  bookings             : {bookings.shape}")
+else:
+    bookings = pd.DataFrame(columns=["event_date", "etd", "eta", "event_status", "container_id", "vessel", "reason", "updated_by", "po_number"])
+    print("  bookings             : 0 rows (file not found; skipped)")
 
 # --- Freight Bills Processed (Bhargava/Sanket) is NOT used for invoice
 # category classification. UPDATED BUSINESS DECISION: rely on GL 1275/1313
@@ -218,7 +239,11 @@ print(f"  bookings             : {bookings.shape}")
 # optional cross-check sheet (qc_processor_crosscheck), never as an input
 # to invoice_events / invoice_compliance.
 def load_processor_tab(sheet_name, container_col):
-    df = pd.read_excel(FILES["freight_processed"], sheet_name=sheet_name)
+    freight_path = FILES["freight_processed"]
+    if not freight_path or not freight_path.exists():
+        return pd.DataFrame(columns=["processor", "sipl", "container", "invoice", "invoice_type",
+                                     "gl_posted", "amount", "invoice_date", "is_pending"])
+    df = pd.read_excel(freight_path, sheet_name=sheet_name)
     df = standardize_columns(df)
     container_col = standardize_columns(pd.DataFrame(columns=[container_col])).columns[0]
     df["container"] = df[container_col].apply(clean_container)
