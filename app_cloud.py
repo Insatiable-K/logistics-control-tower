@@ -12,22 +12,20 @@ from logic_cloud import (
     build_execution_master,
     get_containers_on_water,
     get_arriving_today,
+    get_current_week_arrivals,
     get_next_7_days_arrivals,
     get_location_reached,
     get_location_next_7_days,
     get_port_eta_doc_risk,
     get_eta_performance,
+    get_pos_received_in_range,
+    get_pos_approved_in_range,
     get_rollover_summary,
     get_container_data_issues,
     get_lfd_risk,
+    get_arriving_invoice_risk,
     get_operational_invoice_dashboard,
 )
-# NOTE: get_current_week_arrivals, get_pos_received_in_range,
-# get_pos_approved_in_range, and get_arriving_invoice_risk were previously
-# imported here but never called — booking KPIs are computed inline in the
-# Booking tab below, and get_arriving_invoice_risk has been superseded by
-# get_operational_invoice_dashboard(). Removed to keep the import list
-# honest about what this file actually uses.
 
 
 
@@ -904,7 +902,8 @@ with tab3:
         bills_df=bills_raw,
         gl_bills_df=gl_bills_raw,
         shipment_mapping_df=shipment_mapping_raw,
-        days_ahead=3  # Today, Tomorrow, Day+2, Day+3 — matches logic_cloud default
+        days_ahead=2,   # "Arriving Soon" = today + 2 = 3-day action window
+        days_back=7     # keep recently-arrived containers visible as Past ETA follow-ups
     )
 
     missing_df = dashboard["missing_bills"]
@@ -931,14 +930,14 @@ with tab3:
     # ------------------------------------------------------------------
     # KPI ROW (top of tab)
     # ------------------------------------------------------------------
-    st.subheader("📊 Invoice KPIs — Arriving Next 3 Days")
+    st.subheader("📊 Invoice KPIs — Containers On Water")
     k1, k2, k3, k4, k5, k6 = st.columns(6)
-    k1.metric("🚢 Containers Arriving", kpis["containers_arriving"])
-    k2.metric("✅ Invoice Complete", kpis["invoice_complete"])
+    k1.metric("🌊 Containers On Water", kpis.get("containers_on_water", kpis["containers_arriving"]))
+    k2.metric("🚢 Arriving ≤3 Days", kpis["containers_arriving"])
     k3.metric("🔴 Missing Bills", kpis["containers_missing_bills"])
     k4.metric("⏳ Pending Bills", kpis["pending_bills"])
-    k5.metric("📈 Completion %", f"{kpis['invoice_completion_pct']}%")
-    k6.metric("📦 Avg Missing/Container", kpis["avg_missing_per_container"])
+    k5.metric("✅ Invoice Complete", kpis["invoice_complete"])
+    k6.metric("📈 Completion %", f"{kpis['invoice_completion_pct']}%")
 
     # ------------------------------------------------------------------
     # Three inner tabs (mutually exclusive)
@@ -966,17 +965,21 @@ with tab3:
 
             # ---- OVERVIEW KPIs ----
             approaching_missing = missing_df[
-                missing_df["arrival_status"].isin(["Today", "Approaching"])
+                missing_df["arrival_status"].isin(["Today", "Arriving Soon"])
+            ]
+            on_water_missing = missing_df[
+                missing_df["arrival_status"] == "On Water"
             ]
             past_missing = missing_df[
                 missing_df["arrival_status"] == "Past ETA"
             ]
 
             st.subheader("📊 Overview")
-            o1, o2, o3 = st.columns(3)
-            o1.metric("🚢 Approaching (≤3 days)", approaching_missing["container"].nunique())
-            o2.metric("⏰ Past ETA — Bills Outstanding", past_missing["container"].nunique())
-            o3.metric("📦 Total Containers Affected", missing_df["container"].nunique())
+            o1, o2, o3, o4 = st.columns(4)
+            o1.metric("🚢 Arriving ≤3 Days", approaching_missing["container"].nunique())
+            o2.metric("🌊 On Water (>3 days)", on_water_missing["container"].nunique())
+            o3.metric("⏰ Past ETA — Bills Outstanding", past_missing["container"].nunique())
+            o4.metric("📦 Total Containers Affected", missing_df["container"].nunique())
 
             # ---- PER-CATEGORY KPIs ----
             st.subheader("Missing Bills by Type")
@@ -1003,6 +1006,21 @@ with tab3:
             else:
                 st.dataframe(
                     fmt_date_col(approaching_missing[show].drop_duplicates())
+                    .sort_values("port_eta"),
+                    use_container_width=True
+                )
+
+            # ================================================================
+            # SECTION 1B — ON WATER (still sailing, bills can be collected early)
+            # ================================================================
+            st.subheader("🌊 On Water — Collect Bills Before Arrival")
+            st.caption("Containers still sailing (ETA beyond 3 days) missing one or more bills.")
+
+            if on_water_missing.empty:
+                st.info("No on-water containers with missing bills.")
+            else:
+                st.dataframe(
+                    fmt_date_col(on_water_missing[show].drop_duplicates())
                     .sort_values("port_eta"),
                     use_container_width=True
                 )
@@ -1065,9 +1083,12 @@ with tab3:
             st.success("✅ No pending placeholders outstanding in the arrival window.")
         else:
 
-            # Split into approaching vs past
+            # Split into approaching vs on-water vs past
             approaching_pending = pending_df[
-                pending_df["arrival_status"].isin(["Today", "Approaching"])
+                pending_df["arrival_status"].isin(["Today", "Arriving Soon"])
+            ]
+            on_water_pending = pending_df[
+                pending_df["arrival_status"] == "On Water"
             ]
             past_pending = pending_df[
                 pending_df["arrival_status"] == "Past ETA"
@@ -1075,10 +1096,11 @@ with tab3:
 
             # ---- OVERVIEW KPIs ----
             st.subheader("📊 Overview")
-            p1, p2, p3 = st.columns(3)
-            p1.metric("🚢 Approaching with Pending Bills", approaching_pending["container"].nunique())
-            p2.metric("⏰ Past ETA with Pending Bills", past_pending["container"].nunique())
-            p3.metric("📦 Total Containers with Pending", pending_df["container"].nunique())
+            p1, p2, p3, p4 = st.columns(4)
+            p1.metric("🚢 Arriving ≤3 Days with Pending", approaching_pending["container"].nunique())
+            p2.metric("🌊 On Water with Pending", on_water_pending["container"].nunique())
+            p3.metric("⏰ Past ETA with Pending", past_pending["container"].nunique())
+            p4.metric("📦 Total Containers with Pending", pending_df["container"].nunique())
 
             # ---- PER-CATEGORY PENDING KPIs ----
             st.subheader("Pending Bills by Type")
@@ -1112,6 +1134,21 @@ with tab3:
             else:
                 st.dataframe(
                     fmt_date_col(approaching_pending[show_p].drop_duplicates())
+                    .sort_values("port_eta"),
+                    use_container_width=True
+                )
+
+            # ================================================================
+            # SECTION 1B — ON WATER PENDING (chase vendors early)
+            # ================================================================
+            st.subheader("🌊 On Water — Pending Placeholders")
+            st.caption("Containers still sailing where a PENDING placeholder is waiting on the vendor's real invoice.")
+
+            if on_water_pending.empty:
+                st.info("No on-water containers have pending bill placeholders.")
+            else:
+                st.dataframe(
+                    fmt_date_col(on_water_pending[show_p].drop_duplicates())
                     .sort_values("port_eta"),
                     use_container_width=True
                 )
@@ -1179,16 +1216,20 @@ with tab3:
 
         st.markdown(
             "> **Invoice Complete**: All four required bill types (OF, CUSTOMS, DUTY, DRAYAGE) "
-            "have been received as actual invoices. No action needed."
+            "have been received as actual invoices. Shows every container currently on the water "
+            "with a complete bill set. No action needed."
         )
 
         if complete_df.empty:
-            st.info("No containers with fully complete invoices in the arrival window.")
+            st.info("No containers on the water with fully complete invoices.")
         else:
 
-            # Split complete into approaching vs past
+            # Split complete: on-water (everything not yet arrived) vs past ETA
+            on_water_complete = complete_df[
+                complete_df["arrival_status"].isin(["Today", "Arriving Soon", "On Water"])
+            ]
             approaching_complete = complete_df[
-                complete_df["arrival_status"].isin(["Today", "Approaching"])
+                complete_df["arrival_status"].isin(["Today", "Arriving Soon"])
             ]
             past_complete = complete_df[
                 complete_df["arrival_status"] == "Past ETA"
@@ -1196,10 +1237,11 @@ with tab3:
 
             # ---- OVERVIEW KPIs ----
             st.subheader("📊 Overview")
-            c1, c2, c3 = st.columns(3)
-            c1.metric("🚢 Approaching — Complete", approaching_complete["container"].nunique())
-            c2.metric("⏰ Past ETA — Complete", past_complete["container"].nunique())
-            c3.metric("📦 Total Complete", complete_df["container"].nunique())
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("🌊 On Water — Complete", on_water_complete["container"].nunique())
+            c2.metric("🚢 Arriving ≤3 Days — Complete", approaching_complete["container"].nunique())
+            c3.metric("⏰ Past ETA — Complete", past_complete["container"].nunique())
+            c4.metric("📦 Total Complete", complete_df["container"].nunique())
 
             # ---- DISPLAY COLUMNS ----
             show_c = ["container", "sipl", "po_number", "port_eta", "supplier", "final_destination",
@@ -1207,16 +1249,19 @@ with tab3:
             show_c = [c for c in show_c if c in complete_df.columns]
 
             # ================================================================
-            # SECTION 1 — APPROACHING COMPLETE
+            # SECTION 1 — ALL ON-WATER COMPLETE (sorted by soonest arrival)
             # ================================================================
-            st.subheader("🚢 Approaching — Invoice Ready")
-            st.caption("Containers arriving within 3 days with all invoices received.")
+            st.subheader("🌊 On Water — Invoice Ready")
+            st.caption(
+                "Every container currently on the water with all four invoices received, "
+                "sorted by soonest arrival."
+            )
 
-            if approaching_complete.empty:
-                st.info("No approaching containers have fully complete invoices.")
+            if on_water_complete.empty:
+                st.info("No on-water containers have fully complete invoices.")
             else:
                 st.dataframe(
-                    fmt_date_col(approaching_complete[show_c].drop_duplicates())
+                    fmt_date_col(on_water_complete[show_c].drop_duplicates())
                     .sort_values("port_eta"),
                     use_container_width=True
                 )
