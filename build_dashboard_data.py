@@ -369,6 +369,17 @@ def eta_bucket(days):
 sipl_master["days_to_port_eta"] = (sipl_master["port_eta"] - TODAY).dt.days
 sipl_master["operational_priority"] = sipl_master["days_to_port_eta"].apply(eta_bucket)
 
+def simple_arrival_status(days):
+    if pd.isna(days):
+        return "Unknown"
+    if days < 0:
+        return "Past ETA"
+    if days == 0:
+        return "Today"
+    return "Approaching"
+
+sipl_master["arrival_status"] = sipl_master["days_to_port_eta"].apply(simple_arrival_status)
+
 print(f"  sipl_master          : {sipl_master.shape}")
 print(f"  Operational priority breakdown:")
 print(sipl_master["operational_priority"].value_counts().to_string())
@@ -448,13 +459,40 @@ print(f"  GL-confirmed events (Bills.xls matched to GL by invoice#) : {len(gl_ma
 
 # --- Uncategorized pending activity (context only, not compliance) --------
 # A PENDING bill in Bills.xls has not posted to GL, so we cannot learn its
-# category from a GL description match. We do NOT guess which of the 4
-# categories it will eventually satisfy — that would fabricate precision
-# the data doesn't support. Instead this becomes a separate signal: "we
-# know something is in progress for this container/SIPL," surfaced at the
-# overall_status level (Pending), not attributed to a specific category.
+# category from a GL description match directly. However, we CAN infer it
+# from the business's own history: if a vendor's confirmed (GL-matched)
+# bills are UNAMBIGUOUSLY one category every time, a new pending bill from
+# that same vendor is very likely the same category. Vendors with mixed
+# category history are left unattributed rather than guessed — this is
+# inference from confirmed GL history, not fabrication, and every inferred
+# row is labeled distinctly so it's never confused with a GL-confirmed one.
+vendor_category_history = (
+    gl_matched.dropna(subset=["vendor", "category"])
+    .groupby("vendor")["category"].agg(lambda s: s.unique().tolist())
+)
+vendor_category_map = {
+    vendor: cats[0] for vendor, cats in vendor_category_history.items()
+    if len(cats) == 1 and cats[0] in REQUIRED_CATEGORIES
+}
+print(f"  Vendor->category inference map : {len(vendor_category_map)} vendors "
+      f"unambiguous of {len(vendor_category_history)} with any GL-confirmed history")
+
 pending_activity = bills[bills["is_pending"]][["container", "sipl", "bill_inv", "vendor", "amount"]].copy()
-print(f"  Uncategorized pending activity (context signal only) : {len(pending_activity):,}")
+pending_activity["inferred_category"] = pending_activity["vendor"].map(vendor_category_map)
+inferred_count = pending_activity["inferred_category"].notna().sum()
+print(f"  Uncategorized pending activity : {len(pending_activity):,} total, "
+      f"{inferred_count:,} category-inferred via vendor history, "
+      f"{len(pending_activity) - inferred_count:,} unattributed")
+
+# Pending events WITH an inferred category feed the per-category Pending
+# status below. Pending events WITHOUT one remain a container/SIPL-level
+# "something is in progress" signal only (surfaced as
+# has_uncategorized_pending_activity), never assigned to a specific
+# category — we don't guess for vendors with mixed history.
+pending_events = pending_activity[pending_activity["inferred_category"].notna()].copy()
+pending_events = pending_events.rename(columns={"inferred_category": "category", "bill_inv": "invoice_number"})
+pending_events["is_pending"] = True
+pending_events["source_tier"] = "PENDING_VENDOR_INFERRED"
 
 # =============================================================================
 # STEP 5 — INVOICE EVENT LOG (GL-confirmed only)
@@ -463,10 +501,13 @@ print("\n--- STEP 5: BUILD INVOICE EVENT LOG ---")
 
 event_cols = ["container", "sipl", "category", "is_pending", "amount",
               "source_tier", "invoice_number"]
-invoice_events = gl_matched.reindex(columns=event_cols)
+invoice_events = pd.concat([
+    gl_matched.reindex(columns=event_cols),
+    pending_events.reindex(columns=event_cols),
+], ignore_index=True)
 invoice_events = invoice_events[invoice_events["category"].notna()].reset_index(drop=True)
-print(f"  invoice_events (GL-confirmed) : {invoice_events.shape}")
-print(invoice_events["category"].value_counts().to_string())
+print(f"  invoice_events (GL-confirmed + vendor-inferred pending) : {invoice_events.shape}")
+print(invoice_events.groupby(["category", "is_pending"]).size().to_string())
 
 # =============================================================================
 # STEP 6 — PER-SIPL INVOICE COMPLIANCE  (Complete / Pending / Missing)
@@ -518,9 +559,22 @@ unattributed_by_container = (
     .reindex(columns=REQUIRED_CATEGORIES, fill_value=0)
 )
 
-# Uncategorized pending activity — a signal, not a category-specific match.
+# Uncategorized pending activity — a signal only for SIPLs/containers with
+# no vendor-inferred category match at all (kept for context/transparency,
+# never gates a specific category).
 pending_activity_siplset = set(pending_activity["sipl"].dropna())
 pending_activity_containerset = set(pending_activity["container"].dropna())
+
+# Vendor(s) awaiting follow-up per SIPL/container, for the "Vendor to
+# Follow Up" column on the Pending Bills view.
+vendor_followup_by_sipl = (
+    pending_activity.dropna(subset=["sipl", "vendor"])
+    .groupby("sipl")["vendor"].apply(lambda s: ", ".join(sorted(set(s))))
+)
+vendor_followup_by_container = (
+    pending_activity.dropna(subset=["container", "vendor"])
+    .groupby("container")["vendor"].apply(lambda s: ", ".join(sorted(set(s))))
+)
 
 # --- Assemble the compliance table, one row per active SIPL ----------------
 rows = []
@@ -533,17 +587,26 @@ for _, s in sipl_master.iterrows():
         "po_numbers": s.get("po_numbers"),
         "supplier": s.get("supplier"),
         "freight_forwarder": s.get("freight_forwarder"),
+        "destination": s.get("ship_to_location"),
         "port_eta": s.get("port_eta"),
         "days_to_port_eta": s.get("days_to_port_eta"),
         "operational_priority": s.get("operational_priority"),
+        "arrival_status": s.get("arrival_status"),
     }
     comp_row = complete_by_sipl.loc[sipl_id] if sipl_id in complete_by_sipl.index else pd.Series(0, index=REQUIRED_CATEGORIES)
+    pend_row = pending_by_sipl.loc[sipl_id] if sipl_id in pending_by_sipl.index else pd.Series(0, index=REQUIRED_CATEGORIES)
     unattr_row = unattributed_by_container.loc[container_id] if container_id in unattributed_by_container.index else pd.Series(0, index=REQUIRED_CATEGORIES)
 
-    missing_cats = []
+    missing_cats, pending_cats = [], []
     for cat in REQUIRED_CATEGORIES:
+        # Complete takes precedence: multiple invoices of the same category
+        # (one confirmed, one earlier placeholder) do not downgrade a
+        # confirmed category back to Pending.
         if comp_row[cat] == 1:
             row[f"{cat}_status"] = "Complete"
+        elif pend_row[cat] == 1:
+            row[f"{cat}_status"] = "Pending"
+            pending_cats.append(cat)
         else:
             row[f"{cat}_status"] = "Missing"
             missing_cats.append(cat)
@@ -553,18 +616,24 @@ for _, s in sipl_master.iterrows():
         sipl_id in pending_activity_siplset or container_id in pending_activity_containerset
     )
     row["missing_categories"] = ", ".join(missing_cats)
-    row["has_uncategorized_pending_activity"] = has_pending_activity
+    row["pending_categories"] = ", ".join(pending_cats)
+    row["has_uncategorized_pending_activity"] = has_pending_activity and not pending_cats
+    row["vendor_to_follow_up"] = (
+        vendor_followup_by_sipl.get(sipl_id) or vendor_followup_by_container.get(container_id)
+    )
 
-    if not missing_cats:
+    # Missing = no confirmed bill AND no pending placeholder, per category.
+    # A category with a pending placeholder is NEVER counted as missing.
+    if not missing_cats and not pending_cats:
         row["overall_status"] = "Complete"
-    elif has_pending_activity:
-        # We know a bill has been submitted and hasn't posted yet, but per
-        # the GL-only decision we can't say which missing category it will
-        # resolve. Pending here means "activity in progress," not "this
-        # specific category is pending" — see missing_categories for what
-        # is still confirmed outstanding regardless.
+    elif not missing_cats and pending_cats:
         row["overall_status"] = "Pending"
+    elif missing_cats and not pending_cats:
+        row["overall_status"] = "Missing"
     else:
+        # Some categories confirmed missing, others pending — still an
+        # actionable "Missing" container overall (it has a real gap), but
+        # missing_categories/pending_categories show the exact split.
         row["overall_status"] = "Missing"
     rows.append(row)
 
@@ -615,17 +684,28 @@ for container_id, grp in invoice_compliance.groupby("container", dropna=False):
         "container": container_id,
         "sipl_count": len(grp),
         "sipls": ", ".join(sorted(grp["sipl"].dropna().astype(str))),
+        "po_numbers": ", ".join(sorted(set(
+            po for pos in grp["po_numbers"].dropna() for po in pos.split(", ") if po
+        ))),
+        "supplier": ", ".join(sorted(set(grp["supplier"].dropna()))),
+        "freight_forwarder": ", ".join(sorted(set(grp["freight_forwarder"].dropna()))),
+        "destination": ", ".join(sorted(set(grp["destination"].dropna()))),
+        "vendor_to_follow_up": ", ".join(sorted(set(grp["vendor_to_follow_up"].dropna()))),
         "operational_priority": grp["operational_priority"].iloc[0] if grp["operational_priority"].nunique() == 1 else "Mixed",
         "earliest_port_eta": grp["port_eta"].min(),
     }
-    missing_cats = []
+    missing_cats, pending_cats = [], []
     for cat in REQUIRED_CATEGORIES:
         status = rollup_status(grp[f"{cat}_status"])
         row[f"{cat}_status"] = status
         if status == "Missing":
             offending = grp.loc[grp[f"{cat}_status"] == "Missing", "sipl"].dropna().tolist()
-            missing_cats.append(f"{cat} (SIPL: {', '.join(offending)})")
-    row["missing_detail"] = "; ".join(missing_cats)
+            missing_cats.append(cat)
+            row[f"{cat}_missing_detail"] = f"SIPL: {', '.join(offending)}"
+        elif status == "Pending":
+            pending_cats.append(cat)
+    row["missing_categories"] = ", ".join(missing_cats)
+    row["pending_categories"] = ", ".join(pending_cats)
     row["overall_status"] = rollup_status(grp["overall_status"])
     container_rows.append(row)
 

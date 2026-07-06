@@ -825,3 +825,131 @@ def get_arriving_invoice_risk(df_exec, invoice_compliance, days=3):
 
     risk = df[df["invoice_ready"] != True].copy()
     return risk
+
+
+# -----------------------------------------------------------------------------
+# OPERATIONAL INVOICE DASHBOARD — Missing vs Pending, filters, and KPIs
+#
+# Single entry point for the Invoice Compliance tab. Takes the raw
+# invoice_compliance (per-SIPL) sheet and applies, in order: Port ETA date
+# range, then the dashboard filters, then splits into the simplified
+# Missing / Pending views the UI displays, plus the top-line KPIs.
+#
+# Business rule (per stakeholder spec): Missing and Pending are evaluated
+# INDEPENDENTLY per category. A category with a pending placeholder is
+# NEVER counted as missing for that category, even if other categories on
+# the same SIPL are genuinely missing.
+# -----------------------------------------------------------------------------
+def get_operational_invoice_dashboard(
+    invoice_compliance,
+    eta_start=None,
+    eta_end=None,
+    arrival_status="All",
+    missing_bill_type="All",
+    freight_forwarder="All",
+    destination="All",
+    vendor="All",
+    invoice_readiness="All",
+    search_text=None,
+):
+    CATEGORY_LABELS = {"OF": "Ocean Freight", "CUSTOMS": "Customs", "DUTY": "Duty", "DRAYAGE": "Drayage"}
+    LABEL_TO_CATEGORY = {v: k for k, v in CATEGORY_LABELS.items()}
+
+    df = invoice_compliance.copy()
+    df["port_eta"] = pd.to_datetime(df["port_eta"], errors="coerce", format="mixed")
+
+    # --- Port ETA date range filter -----------------------------------------
+    if eta_start is not None:
+        df = df[df["port_eta"] >= pd.to_datetime(eta_start)]
+    if eta_end is not None:
+        df = df[df["port_eta"] <= pd.to_datetime(eta_end)]
+
+    # --- Dashboard filters ---------------------------------------------------
+    if arrival_status and arrival_status != "All":
+        df = df[df["arrival_status"] == arrival_status]
+
+    if missing_bill_type and missing_bill_type != "All":
+        cat = LABEL_TO_CATEGORY.get(missing_bill_type, missing_bill_type)
+        df = df[df[f"{cat}_status"] == "Missing"]
+
+    if freight_forwarder and freight_forwarder != "All":
+        df = df[df["freight_forwarder"] == freight_forwarder]
+
+    if destination and destination != "All":
+        df = df[df["destination"] == destination]
+
+    if vendor and vendor != "All":
+        df = df[df["vendor_to_follow_up"].fillna("").str.contains(re.escape(vendor), na=False)]
+
+    if invoice_readiness and invoice_readiness != "All":
+        if invoice_readiness == "Complete":
+            df = df[df["overall_status"] == "Complete"]
+        elif invoice_readiness == "Incomplete":
+            df = df[df["overall_status"] != "Complete"]
+        elif invoice_readiness == "Pending Only":
+            df = df[df["overall_status"] == "Pending"]
+
+    if search_text:
+        s = search_text.strip()
+        if s:
+            mask = (
+                df["container"].fillna("").astype(str).str.contains(s, case=False, na=False) |
+                df["sipl"].fillna("").astype(str).str.contains(s, case=False, na=False) |
+                df["po_numbers"].fillna("").astype(str).str.contains(s, case=False, na=False)
+            )
+            df = df[mask]
+
+    # --- Human-readable missing/pending category labels ---------------------
+    def relabel(cats_str):
+        if not cats_str or pd.isna(cats_str):
+            return ""
+        return ", ".join(CATEGORY_LABELS.get(c.strip(), c.strip()) for c in str(cats_str).split(",") if c.strip())
+
+    df["missing_bills_display"] = df["missing_categories"].apply(relabel)
+    df["pending_bills_display"] = df["pending_categories"].apply(relabel)
+
+    # --- Simplified Missing Bills view ---------------------------------------
+    missing_df = df[df["missing_bills_display"] != ""].copy()
+    missing_df = missing_df.rename(columns={
+        "container": "Container", "po_numbers": "PO", "sipl": "SIPL",
+        "port_eta": "Port ETA", "arrival_status": "Arrival Status",
+        "missing_bills_display": "Missing Bills", "freight_forwarder": "Freight Forwarder",
+        "vendor_to_follow_up": "Vendor",
+    })
+    missing_cols = ["Container", "PO", "SIPL", "Port ETA", "Arrival Status",
+                    "Missing Bills", "Freight Forwarder", "Vendor"]
+    missing_df = missing_df[[c for c in missing_cols if c in missing_df.columns]]
+
+    # --- Simplified Pending Bills view ---------------------------------------
+    pending_df = df[df["pending_bills_display"] != ""].copy()
+    pending_df["Days Until Arrival"] = pending_df["days_to_port_eta"]
+    pending_df = pending_df.rename(columns={
+        "container": "Container", "po_numbers": "PO", "sipl": "SIPL",
+        "port_eta": "Port ETA", "arrival_status": "Arrival Status",
+        "pending_bills_display": "Pending Bills", "vendor_to_follow_up": "Vendor to Follow Up",
+    })
+    pending_cols = ["Container", "PO", "SIPL", "Port ETA", "Arrival Status",
+                    "Pending Bills", "Vendor to Follow Up", "Days Until Arrival"]
+    pending_df = pending_df[[c for c in pending_cols if c in pending_df.columns]]
+
+    # --- Compliance KPI -------------------------------------------------------
+    total = len(df)
+    ready = (df["overall_status"] == "Complete").sum()
+    compliance_pct = round(100 * ready / total, 1) if total else 0.0
+
+    kpi = {
+        "compliance_pct": compliance_pct,
+        "ready_count": int(ready),
+        "total_count": int(total),
+        "ocean_freight_missing": int((df["OF_status"] == "Missing").sum()),
+        "customs_missing": int((df["CUSTOMS_status"] == "Missing").sum()),
+        "duty_missing": int((df["DUTY_status"] == "Missing").sum()),
+        "drayage_missing": int((df["DRAYAGE_status"] == "Missing").sum()),
+    }
+
+    return {
+        "filtered": df,
+        "missing_df": missing_df.sort_values("Port ETA", na_position="last"),
+        "pending_df": pending_df.sort_values("Port ETA", na_position="last"),
+        "kpi": kpi,
+    }
