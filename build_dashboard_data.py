@@ -444,7 +444,11 @@ def clean_shipment_mapping(df):
     df["container_id"] = df["container"].apply(clean_container_strict)
     df = df[df["container_id"].notna()].copy()
     df = df.drop_duplicates().reset_index(drop=True)
-    return df
+    # Drop the original raw columns so only the canonical names remain.
+    # If these aren't dropped, the Excel ships with both `container` and
+    # `container_id` (and `sipl`/`sipl_number`, `p_o`/`po_number`), which
+    # then collides on rename in logic_cloud.build_compliance_bills.
+    return df.drop(columns=["p_o", "sipl", "container"], errors="ignore")
 
 shipment_mapping = standardize_columns(shipment_mapping_raw)
 shipment_mapping = shipment_mapping.loc[:, shipment_mapping.columns != ""]
