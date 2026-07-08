@@ -76,14 +76,21 @@ def calculate_demurrage_risk(in_transit_df, daily_rate=150):
 
     today = pd.Timestamp.today().normalize()
 
-    # Convert port_eta to datetime
-    in_transit_df['_port_eta'] = pd.to_datetime(in_transit_df['port_eta'], errors='coerce')
+    # Make a copy to avoid modifying original
+    df = in_transit_df.copy()
+
+    # Convert port_eta to datetime, filter to valid values only
+    df['_port_eta'] = pd.to_datetime(df['port_eta'], errors='coerce')
+    df = df[df['_port_eta'].notna()].copy()
+
+    if len(df) == 0:
+        return pd.DataFrame()
 
     # Calculate days from port ETA (negative = overdue, positive = days until)
-    in_transit_df['_days_from_eta'] = (in_transit_df['_port_eta'] - today).dt.days
+    df['_days_from_eta'] = (df['_port_eta'] - today).dt.days
 
     # Focus on containers past or within 3 days of ETA (rough proxy for LFD risk)
-    at_risk = in_transit_df[in_transit_df['_days_from_eta'] <= 3].copy()
+    at_risk = df[df['_days_from_eta'] <= 3].copy()
 
     if len(at_risk) == 0:
         return pd.DataFrame()
@@ -101,7 +108,7 @@ def calculate_demurrage_risk(in_transit_df, daily_rate=150):
     ]].sort_values('estimated_exposure', ascending=False)
 
 
-def calculate_missing_invoice_risk(invoice_comp_df, in_transit_df):
+def calculate_missing_invoice_risk(invoice_comp_df):
     """
     Flag containers with Missing invoices that are at or near port.
     """
@@ -116,15 +123,14 @@ def calculate_missing_invoice_risk(invoice_comp_df, in_transit_df):
     if len(missing) == 0:
         return pd.DataFrame()
 
-    # Join with in_transit to get ETA
-    missing = missing.merge(
-        in_transit_df[['sipl', 'port_eta', 'supplier']],
-        on='sipl',
-        how='left'
-    )
+    # Filter to containers with valid port_eta (already in invoice_compliance)
+    missing['_port_eta'] = pd.to_datetime(missing['port_eta'], errors='coerce')
+    missing = missing[missing['_port_eta'].notna()].copy()
+
+    if len(missing) == 0:
+        return pd.DataFrame()
 
     # Filter to containers at/near port (within 7 days)
-    missing['_port_eta'] = pd.to_datetime(missing['port_eta'], errors='coerce')
     missing['_days_to_eta'] = (missing['_port_eta'] - today).dt.days
     missing = missing[missing['_days_to_eta'] <= 7].copy()
 
@@ -181,10 +187,11 @@ def calculate_unified_exception_queue(demurrage_df, invoice_risk_df, in_transit_
             'port_eta': row['port_eta']
         })
 
-    # Add HOLD/EXAM/DAMAGED status
+    # Add HOLD/EXAM/DAMAGED status (only those with valid port_eta)
     problem_statuses = ['HOLD', 'EXAM', 'DAMAGED', 'ISSUE']
     problem_containers = in_transit_df[
-        in_transit_df['status'].fillna('').str.contains('|'.join(problem_statuses), case=False)
+        (in_transit_df['status'].fillna('').str.contains('|'.join(problem_statuses), case=False)) &
+        (in_transit_df['port_eta'].notna())  # Only include those with valid ETA
     ].copy()
 
     for _, row in problem_containers.iterrows():
@@ -216,7 +223,7 @@ def calculate_unified_exception_queue(demurrage_df, invoice_risk_df, in_transit_
 
 # Calculate risk metrics
 demurrage_risk = calculate_demurrage_risk(in_transit)
-missing_invoices = calculate_missing_invoice_risk(invoice_compliance, in_transit)
+missing_invoices = calculate_missing_invoice_risk(invoice_compliance)
 exception_queue = calculate_unified_exception_queue(demurrage_risk, missing_invoices, in_transit)
 
 # Tabs
