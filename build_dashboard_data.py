@@ -490,7 +490,34 @@ print(f"  Total invoice events: {len(invoice_events):,}")
 # =============================================================================
 # STEP 7: BUILD INVOICE COMPLIANCE PER SIPL
 # =============================================================================
-print("\n--- STEP 7: BUILD INVOICE COMPLIANCE (PER-SIPL) ---")
+print("\n--- STEP 7: BUILD INVOICE COMPLIANCE (using v3 corrected logic) ---")
+
+# Run the v3 ETL to generate correct invoice_compliance data
+import subprocess
+print("  Running build_dashboard_data_v3.py...")
+try:
+    result = subprocess.run(
+        [sys.executable, "build_dashboard_data_v3.py"],
+        capture_output=True,
+        text=True,
+        check=True
+    )
+    print("  [OK] v3 logic completed")
+    # Load the generated CSV
+    invoice_compliance = pd.read_csv('invoice_compliance_v3_final.csv')
+    print(f"  [OK] Loaded invoice_compliance: {len(invoice_compliance)} SIPLs")
+    print(f"       Complete: {(invoice_compliance['overall_status'] == 'Complete').sum()}")
+    print(f"       Pending: {(invoice_compliance['overall_status'] == 'Pending').sum()}")
+    print(f"       Missing: {(invoice_compliance['overall_status'] == 'Missing').sum()}")
+except subprocess.CalledProcessError as e:
+    print(f"  [ERROR] v3 logic failed: {e.stderr}")
+    invoice_compliance = None
+except FileNotFoundError:
+    print("  [WARNING] v3 CSV not found, using legacy logic")
+    invoice_compliance = None
+
+if invoice_compliance is None:
+    print("\n--- STEP 7 (LEGACY FALLBACK): BUILD INVOICE COMPLIANCE (PER-SIPL) ---")
 
 required_events = invoice_events[invoice_events["category"].isin(REQUIRED_CATEGORIES)].copy()
 

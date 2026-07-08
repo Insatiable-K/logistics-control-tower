@@ -26,7 +26,7 @@ import subprocess
 import sys
 
 print("=" * 60)
-print("STEP 1: RUNNING ETL")
+print("STEP 1: RUNNING LEGACY ETL")
 print("=" * 60)
 
 try:
@@ -36,11 +36,29 @@ try:
         check=True
     )
 
-    print("\nETL completed successfully")
+    print("\nLegacy ETL completed successfully")
 
 except subprocess.CalledProcessError:
 
-    print("\nETL FAILED")
+    print("\nLegacy ETL FAILED")
+    raise SystemExit(1)
+
+print("\n" + "=" * 60)
+print("STEP 1B: RUNNING INVOICE COMPLIANCE ETL")
+print("=" * 60)
+
+try:
+
+    subprocess.run(
+        [sys.executable, "build_dashboard_data_v3.py"],
+        check=True
+    )
+
+    print("\nInvoice Compliance ETL completed successfully")
+
+except subprocess.CalledProcessError:
+
+    print("\nInvoice Compliance ETL FAILED")
     raise SystemExit(1)
 
 print("=" * 60)
@@ -96,6 +114,18 @@ for table in TABLES:
         print(f"FAILED: {table}")
         print(e)
 
+# Load invoice compliance data
+print("\n" + "=" * 60)
+print("STEP 3: LOADING INVOICE COMPLIANCE DATA")
+print("=" * 60)
+
+try:
+    invoice_compliance = pd.read_csv('invoice_compliance_v3_final.csv')
+    print(f"Loaded invoice_compliance: {len(invoice_compliance)} rows")
+except Exception as e:
+    print(f"Warning: Could not load invoice_compliance CSV: {e}")
+    invoice_compliance = None
+
 # Create both files
 for file_name in [dated_file, latest_file]:
 
@@ -111,6 +141,14 @@ for file_name in [dated_file, latest_file]:
             df.to_excel(
                 writer,
                 sheet_name=table[:31],
+                index=False
+            )
+
+        # Add invoice compliance sheet
+        if invoice_compliance is not None:
+            invoice_compliance.to_excel(
+                writer,
+                sheet_name="invoice_compliance",
                 index=False
             )
 
