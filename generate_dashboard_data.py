@@ -1,7 +1,22 @@
 import pandas as pd
 from logic import get_engine
 
+from datetime import datetime
+from pathlib import Path
 
+today = datetime.now().strftime("%Y-%m-%d")
+
+output_folder = Path(
+    r"C:\Users\Abhay\Architectural Surfaces\Mohan - Logistics\Logistics Tracker\Dashboards\Container Movement Control Tower"
+)
+
+output_folder.mkdir(
+    parents=True,
+    exist_ok=True
+)
+
+dated_file = output_folder / f"dashboard_data_{today}.xlsx"
+latest_file = output_folder / "dashboard_data.xlsx"
 
 # ==================================================
 # RUN ETL FIRST
@@ -55,45 +70,52 @@ TABLES = [
 # EXPORT
 # ==================================================
 
-output_file = "dashboard_data.xlsx"
 
 print("Reading SQL tables...")
 
-with pd.ExcelWriter(
-    output_file,
-    engine="openpyxl"
-) as writer:
+# Load each table once
+tables_data = {}
 
-    for table in TABLES:
+for table in TABLES:
 
-        try:
+    try:
 
-            print(f"Exporting {table}")
+        print(f"Loading {table}")
 
-            df = pd.read_sql(
-                f"SELECT * FROM {table}",
-                engine
-            )
+        tables_data[table] = pd.read_sql(
+            f"SELECT * FROM {table}",
+            engine
+        )
+
+        print(
+            f"  Rows: {len(tables_data[table]):,}"
+        )
+
+    except Exception as e:
+
+        print(f"FAILED: {table}")
+        print(e)
+
+# Create both files
+for file_name in [dated_file, latest_file]:
+
+    print(f"\nCreating {file_name}")
+
+    with pd.ExcelWriter(
+        file_name,
+        engine="openpyxl"
+    ) as writer:
+
+        for table, df in tables_data.items():
 
             df.to_excel(
                 writer,
-                sheet_name=table[:31],   # Excel limit
+                sheet_name=table[:31],
                 index=False
             )
 
-            print(
-                f"  Rows: {len(df):,}"
-            )
-
-        except Exception as e:
-
-            print(
-                f"FAILED: {table}"
-            )
-
-            print(e)
-
 print("=" * 60)
-print("Dashboard Package Created")
-print(output_file)
+print("Dashboard Packages Created")
+print(f"Archive: {dated_file}")
+print(f"Latest : {latest_file}")
 print("=" * 60)

@@ -223,20 +223,34 @@ account_1313["gl_account"] = 1313
 gl_bills = pd.concat([account_1275, account_1313], ignore_index=True)
 print(f"\n=== GL BILLS === {gl_bills.shape}")
 
+
+
 # =============================================================================
 # BILLS
 # =============================================================================
 
-bills = bills.drop(columns=["", ""], errors="ignore")
-bills = bills.iloc[:, :13]
-bills = standardize_columns(bills)
-bills["container"] = bills["container"].apply(clean_container)
-bills = bills[
-    bills["container"].notna() |
-    bills.drop(columns=["container"]).isna().all(axis=1)
-].reset_index(drop=True)
-print(f"\n=== BILLS === {bills.shape}")
+# Keep first 14 columns (includes Notes column)
+bills = bills.iloc[:, :14]
 
+bills = standardize_columns(bills)
+
+# Rename last column to notes
+if len(bills.columns) == 14:
+    bills.columns = list(bills.columns[:-1]) + ["notes"]
+
+# Clean container field
+bills["container"] = bills["container"].apply(clean_container)
+
+# Keep rows if:
+#   1. Valid container exists
+#   2. Notes exist (may contain PO / SIPL / Container references)
+bills = bills[
+    bills["container"].notna()
+    |
+    bills["notes"].notna()
+].reset_index(drop=True)
+
+print(f"\n=== BILLS === {bills.shape}")
 # =============================================================================
 # IN_TRANSIT
 # =============================================================================
@@ -318,7 +332,8 @@ def clean_freight_bills(df):
     df["sipl"]           = df["sipl"].pipe(clean_text)
     df["sps_inv_no"]     = df["sps_inv_no"].pipe(clean_text).str.upper()
     df["invoice_type"]   = df["invoice_type"].pipe(clean_text).str.title()
-    df["input_by"]       = df["input_by"].pipe(clean_text)
+    df["input_by"]       = df["input_by"].pipe(clean_text)   
+    
     return df.reset_index(drop=True)
 
 
@@ -370,6 +385,7 @@ def clean_bills(df):
     df["non_inventory_vendor"] = df["non_inventory_vendor"].pipe(clean_text)
     df["supplier"]             = df["supplier"].pipe(clean_text)
     df["sipl_inv"]             = df["sipl_inv"].pipe(clean_text)
+    df["notes"]                = df["notes"].pipe(clean_text)
     return df.reset_index(drop=True)
 
 

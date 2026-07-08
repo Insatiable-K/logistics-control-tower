@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Invoice Compliance - Containers Reaching Port</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #f5f5f5; padding: 20px; }
+        .container { max-width: 1400px; margin: 0 auto; }
+        h1 { color: #1a1a1a; margin-bottom: 30px; font-size: 28px; }
+
+        .summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin-bottom: 30px; }
+        .card { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .card h3 { font-size: 14px; color: #666; margin-bottom: 10px; font-weight: normal; }
+        .card .number { font-size: 36px; font-weight: bold; }
+        .card.complete .number { color: #28a745; }
+        .card.pending .number { color: #ffc107; }
+        .card.missing .number { color: #dc3545; }
+        .card .percent { font-size: 14px; color: #999; margin-top: 5px; }
+
+        .filters { display: flex; gap: 10px; margin-bottom: 20px; flex-wrap: wrap; }
+        .filter-btn { padding: 8px 16px; border: 2px solid #ddd; background: white; border-radius: 4px; cursor: pointer; font-size: 14px; transition: all 0.3s; }
+        .filter-btn:hover { border-color: #007bff; }
+        .filter-btn.active { background: #007bff; color: white; border-color: #007bff; }
+
+        table { width: 100%; border-collapse: collapse; background: white; box-shadow: 0 2px 4px rgba(0,0,0,0.1); border-radius: 8px; overflow: hidden; }
+        thead { background: #f8f9fa; border-bottom: 2px solid #dee2e6; }
+        th { padding: 15px; text-align: left; font-weight: 600; color: #333; font-size: 13px; text-transform: uppercase; }
+        td { padding: 15px; border-bottom: 1px solid #dee2e6; color: #333; font-size: 14px; }
+        tr:hover { background: #f8f9fa; }
+
+        .status-badge { display: inline-block; padding: 6px 12px; border-radius: 20px; font-size: 12px; font-weight: 600; }
+        .status-complete { background: #d4edda; color: #155724; }
+        .status-pending { background: #fff3cd; color: #856404; }
+        .status-missing { background: #f8d7da; color: #721c24; }
+
+        tr.row-complete { background: #f1f9f6; }
+        tr.row-pending { background: #fffbf0; }
+        tr.row-missing { background: #fef5f5; }
+
+        .categories { font-size: 12px; color: #666; max-width: 250px; word-break: break-word; }
+        .supplier { max-width: 200px; word-break: break-word; }
+        .eta { font-weight: 500; color: #007bff; }
+
+        .info-box { background: #d1ecf1; border-left: 4px solid #0c5460; padding: 15px; margin-bottom: 20px; border-radius: 4px; }
+        .info-box h4 { color: #0c5460; margin-bottom: 8px; }
+        .info-box p { color: #0c5460; font-size: 13px; line-height: 1.6; }
+
+        .no-results { text-align: center; padding: 40px; color: #999; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>Invoice Compliance: Containers Reaching Port</h1>
+
+    <div class="info-box">
+        <h4>Status Definitions</h4>
+        <p><strong>Complete:</strong> All 4 invoice categories (Ocean Freight, Customs, Duty, Drayage) have GL entries</p>
+        <p><strong>Pending:</strong> Some categories lack GL entries but have PENDING bill markers (invoice team awaiting vendor)</p>
+        <p><strong>Missing:</strong> Some categories have no GL entry and no PENDING marker (invoice not yet received)</p>
+    </div>
+
+    <div class="summary">
+        <div class="card complete">
+            <h3>Complete</h3>
+            <div class="number">4</div>
+            <div class="percent">4.8%</div>
+        </div>
+        <div class="card pending">
+            <h3>Pending</h3>
+            <div class="number">28</div>
+            <div class="percent">33.3%</div>
+        </div>
+        <div class="card missing">
+            <h3>Missing</h3>
+            <div class="number">52</div>
+            <div class="percent">61.9%</div>
+        </div>
+        <div class="card">
+            <h3>Total SIPLs</h3>
+            <div class="number">84</div>
+            <div class="percent">Reaching Port 2-7 days</div>
+        </div>
+    </div>
+
+    <div class="filters">
+        <button class="filter-btn active" onclick="filterTable('all')">All (84)</button>
+        <button class="filter-btn" onclick="filterTable('complete')">Complete (4)</button>
+        <button class="filter-btn" onclick="filterTable('pending')">Pending (28)</button>
+        <button class="filter-btn" onclick="filterTable('missing')">Missing (52)</button>
+    </div>
+
+    <table id="complianceTable">
+        <thead>
+            <tr>
+                <th>SIPL</th>
+                <th>Container</th>
+                <th>Supplier</th>
+                <th>Port ETA</th>
+                <th>Overall Status</th>
+                <th>OF</th>
+                <th>Customs</th>
+                <th>Duty</th>
+                <th>Drayage</th>
+                <th>Missing Categories</th>
+                <th>Pending Categories</th>
+            </tr>
+        </thead>
+        <tbody id="tableBody">
+        </tbody>
+    </table>
+</div>
+
+<script>
+    // Compliance data - will be populated by Python
+    const data = DATA_PLACEHOLDER;
+
+    function populateTable(filteredData) {
+        const tbody = document.getElementById('tableBody');
+        tbody.innerHTML = '';
+
+        if (filteredData.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="11" class="no-results">No results found</td></tr>';
+            return;
+        }
+
+        filteredData.forEach(row => {
+            const tr = document.createElement('tr');
+            tr.className = 'row-' + row.overall_status.toLowerCase();
+            tr.dataset.status = row.overall_status.toLowerCase();
+
+            tr.innerHTML = `
+                <td><strong>${row.sipl}</strong></td>
+                <td>${row.container}</td>
+                <td class="supplier">${row.supplier}</td>
+                <td class="eta">${row.port_eta}</td>
+                <td><span class="status-badge status-${row.overall_status.toLowerCase()}">${row.overall_status}</span></td>
+                <td><span class="status-badge status-${row['Ocean Freight_status'].toLowerCase()}">${row['Ocean Freight_status']}</span></td>
+                <td><span class="status-badge status-${row['Customs_status'].toLowerCase()}">${row['Customs_status']}</span></td>
+                <td><span class="status-badge status-${row['Duty_status'].toLowerCase()}">${row['Duty_status']}</span></td>
+                <td><span class="status-badge status-${row['Drayage_status'].toLowerCase()}">${row['Drayage_status']}</span></td>
+                <td class="categories">${row.missing_categories || '—'}</td>
+                <td class="categories">${row.pending_categories || '—'}</td>
+            `;
+            tbody.appendChild(tr);
+        });
+    }
+
+    function filterTable(status) {
+        // Update active button
+        document.querySelectorAll('.filter-btn').forEach(btn => btn.classList.remove('active'));
+        event.target.classList.add('active');
+
+        // Filter data
+        if (status === 'all') {
+            populateTable(data);
+        } else {
+            const filtered = data.filter(row => row.overall_status.toLowerCase() === status);
+            populateTable(filtered);
+        }
+    }
+
+    // Initial population
+    populateTable(data);
+</script>
+
+</body>
+</html>

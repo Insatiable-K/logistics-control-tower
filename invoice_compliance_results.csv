@@ -1,0 +1,235 @@
+sipl,container,supplier,status,OF_status,CUSTOMS_status,DUTY_status,DRAYAGE_status,missing_categories,pending_categories,overall_status
+145564B,HPCU2538156,"Compacstone USA, Inc",INTRANSIT,Pending,Complete,Complete,Pending,,"OF, DRAYAGE",Pending
+145564C,HPCU2538156,"Compacstone USA, Inc",INTRANSIT,Pending,Complete,Complete,Pending,,"OF, DRAYAGE",Pending
+145729B,HPCU2538156,"Compacstone USA, Inc",INTRANSIT,Pending,Complete,Complete,Pending,,"OF, DRAYAGE",Pending
+145739,CAIU6195977,"Compacstone USA, Inc",INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+148976C,TGCU2141650,"Compacstone USA, Inc",INTRANSIT,Pending,Complete,Pending,Pending,,"OF, DUTY, DRAYAGE",Pending
+149455,MSMU1056280,FMG Shapes Srl,INTRANSIT,Pending,Complete,Pending,Pending,,"OF, DUTY, DRAYAGE",Pending
+149455B,MSMU1056280,FMG Shapes Srl,INTRANSIT,Pending,Complete,Pending,Pending,,"OF, DUTY, DRAYAGE",Pending
+153361,HPCU2538156,"Compacstone USA, Inc",INTRANSIT,Pending,Complete,Complete,Pending,,"OF, DRAYAGE",Pending
+153361B,HPCU2538156,"Compacstone USA, Inc",INTRANSIT,Pending,Complete,Complete,Pending,,"OF, DRAYAGE",Pending
+153390,CAIU6195977,"Compacstone USA, Inc",INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+155259,MEDU5655981,FMG Shapes Srl,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+155507C,MSBU1828245,CTM DOGAL TAS IC VE DIS TICARET ANONIM SIRKETI,INTRANSIT,Missing,Complete,Complete,Complete,OF,,Missing
+155674,MRKU7248456,Global Surfaces Limited - Quartz,INTRANSIT,Complete,Complete,Complete,Complete,,,Complete
+155711,HASU1321167,Quantra Natural Quartz Surfaces UNIT 2 | Pokarna Engineered Stone Limited,INTRANSIT,Pending,Pending,Pending,Pending,,"OF, CUSTOMS, DUTY, DRAYAGE",Pending
+155711B,HASU1321167,Quantra Natural Quartz Surfaces UNIT 2 | Pokarna Engineered Stone Limited,INTRANSIT,Pending,Pending,Pending,Pending,,"OF, CUSTOMS, DUTY, DRAYAGE",Pending
+155712,MRKU7021415,Quantra Natural Quartz Surfaces UNIT 2 | Pokarna Engineered Stone Limited,INTRANSIT,Pending,Pending,Pending,Pending,,"OF, CUSTOMS, DUTY, DRAYAGE",Pending
+155716,MRKU9136120,Quantra Natural Quartz Surfaces UNIT 2 | Pokarna Engineered Stone Limited,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+155717,MRKU8449861,Quantra Natural Quartz Surfaces UNIT 2 | Pokarna Engineered Stone Limited,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+155719,CAAU2505644,Quantra Natural Quartz Surfaces UNIT 2 | Pokarna Engineered Stone Limited,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+155720,MAGU2415361,Quantra Natural Quartz Surfaces UNIT 2 | Pokarna Engineered Stone Limited,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+155724,HLXU1052090,Quantra Natural Quartz Surfaces UNIT 2 | Pokarna Engineered Stone Limited,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+155726,MRKU9097370,Quantra Natural Quartz Surfaces UNIT 2 | Pokarna Engineered Stone Limited,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+155727,MSKU5677900,Quantra Natural Quartz Surfaces UNIT 2 | Pokarna Engineered Stone Limited,INTRANSIT,Pending,Pending,Pending,Pending,,"OF, CUSTOMS, DUTY, DRAYAGE",Pending
+155728,BMOU1447551,Quantra Natural Quartz Surfaces UNIT 2 | Pokarna Engineered Stone Limited,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+155729,MRKU8604269,Quantra Natural Quartz Surfaces UNIT 2 | Pokarna Engineered Stone Limited,INTRANSIT,Pending,Pending,Pending,Pending,,"OF, CUSTOMS, DUTY, DRAYAGE",Pending
+155730,SUDU7323982,Quantra Natural Quartz Surfaces UNIT 2 | Pokarna Engineered Stone Limited,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+155732,MRSU0125200,Quantra Natural Quartz Surfaces UNIT 2 | Pokarna Engineered Stone Limited,INTRANSIT,Pending,Pending,Pending,Pending,,"OF, CUSTOMS, DUTY, DRAYAGE",Pending
+155737,SUDU7530423,Quantra Natural Quartz Surfaces UNIT 2 | Pokarna Engineered Stone Limited,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+155742,FTAU2096640,Quantra Natural Quartz Surfaces UNIT 2 | Pokarna Engineered Stone Limited,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+155756,BSIU3314635,Quantra Natural Quartz Surfaces UNIT 2 | Pokarna Engineered Stone Limited,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+155759,MRKU9357121,Quantra Natural Quartz Surfaces UNIT 2 | Pokarna Engineered Stone Limited,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+155761,HASU1030259,Quantra Natural Quartz Surfaces UNIT 2 | Pokarna Engineered Stone Limited,INTRANSIT,Pending,Pending,Pending,Pending,,"OF, CUSTOMS, DUTY, DRAYAGE",Pending
+155933B,SEGU3671280,NIKOLAUS BAGNARA SPA - AG,INTRANSIT,Pending,Pending,Pending,Pending,,"OF, CUSTOMS, DUTY, DRAYAGE",Pending
+156256,MEDU3198757,Quantra Natural Quartz Surfaces UNIT 2 | Pokarna Engineered Stone Limited,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+156353B,MSBU1828245,CTM DOGAL TAS IC VE DIS TICARET ANONIM SIRKETI,INTRANSIT,Missing,Complete,Complete,Complete,OF,,Missing
+156858,BSIU2815550,Global Surfaces FZE,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+156873,MSKU3698061,Global Surfaces FZE,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+157623,SUDU7832212,Global Surfaces FZE,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+157641,MRKU8437156,Sunex Stones Private Limited,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+157641B,MRKU8437156,Sunex Stones Private Limited,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+159840,MRKU8892801,QuartzKraft LLP,INTRANSIT,Pending,Pending,Pending,Pending,,"OF, CUSTOMS, DUTY, DRAYAGE",Pending
+159840B,MRKU8892801,QuartzKraft LLP,INTRANSIT,Pending,Pending,Pending,Pending,,"OF, CUSTOMS, DUTY, DRAYAGE",Pending
+159840C,MRKU8892801,QuartzKraft LLP,INTRANSIT,Pending,Pending,Pending,Pending,,"OF, CUSTOMS, DUTY, DRAYAGE",Pending
+159842,MSKU5752243,QuartzKraft LLP,INTRANSIT,Pending,Pending,Pending,Pending,,"OF, CUSTOMS, DUTY, DRAYAGE",Pending
+159842B,MSKU5752243,QuartzKraft LLP,INTRANSIT,Pending,Pending,Pending,Pending,,"OF, CUSTOMS, DUTY, DRAYAGE",Pending
+159842C,MSKU5752243,QuartzKraft LLP,INTRANSIT,Pending,Pending,Pending,Pending,,"OF, CUSTOMS, DUTY, DRAYAGE",Pending
+159843,MSKU5760613,QuartzKraft LLP,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+159843B,MSKU5760613,QuartzKraft LLP,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+159843C,MSKU5760613,QuartzKraft LLP,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+159851,MRKU7299746,Global Surfaces FZE,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+159851B,TTNU1290366,Global Surfaces FZE,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+159853,HASU1399735,Global Surfaces FZE,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+159854,HASU1399735,Global Surfaces FZE,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+159855,MRKU7299746,Global Surfaces FZE,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+159898,MRKU9596846,Global Surfaces FZE,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+159898B,TRHU2288240,Global Surfaces FZE,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+159898C,TRHU2288240,Global Surfaces FZE,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+159899,MRKU9770768,Global Surfaces FZE,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+159901,MSKU7772465,Global Surfaces FZE,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+159901B,MSKU7772465,Global Surfaces FZE,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+159903,MSKU3698061,Global Surfaces FZE,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+159903B,MSKU3698061,Global Surfaces FZE,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+159912,MRKU7248456,Global Surfaces Limited - Quartz,INTRANSIT,Complete,Complete,Complete,Complete,,,Complete
+164306,MSKU7772465,Global Surfaces FZE,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+164307,TRHU2288240,Global Surfaces FZE,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+164308,TTNU1290366,Global Surfaces FZE,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+164310,MRKU9596846,Global Surfaces FZE,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+164313,MRKU9770768,Global Surfaces FZE,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+164322,MRKU8277490,Global Surfaces Limited - Quartz,INTRANSIT,Pending,Pending,Pending,Pending,,"OF, CUSTOMS, DUTY, DRAYAGE",Pending
+164323,MRKU7490958,Global Surfaces Limited - Quartz,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+164324,GLDU5582250,Global Surfaces Limited - Quartz,INTRANSIT,Pending,Pending,Pending,Pending,,"OF, CUSTOMS, DUTY, DRAYAGE",Pending
+166027C,MSMU2833403,Stone Pro Di Galeazzi Francesco,INTRANSIT,Pending,Pending,Pending,Pending,,"OF, CUSTOMS, DUTY, DRAYAGE",Pending
+166027D,MSMU2833403,Stone Pro Di Galeazzi Francesco,INTRANSIT,Pending,Pending,Pending,Pending,,"OF, CUSTOMS, DUTY, DRAYAGE",Pending
+166028,MSMU1056280,FMG Shapes Srl,INTRANSIT,Pending,Complete,Pending,Pending,,"OF, DUTY, DRAYAGE",Pending
+166028B,MSMU1056280,FMG Shapes Srl,INTRANSIT,Pending,Complete,Pending,Pending,,"OF, DUTY, DRAYAGE",Pending
+166371E,MSMU2833403,Stone Pro Di Galeazzi Francesco,INTRANSIT,Pending,Pending,Pending,Pending,,"OF, CUSTOMS, DUTY, DRAYAGE",Pending
+166371F,MSMU2833403,Stone Pro Di Galeazzi Francesco,INTRANSIT,Pending,Pending,Pending,Pending,,"OF, CUSTOMS, DUTY, DRAYAGE",Pending
+166980B,MSMU3424396,"Ruipedra, World of Natural Stone, S.A.",INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+167521,MSNU1228696,Ceramiche Marca Corona,INTRANSIT,Missing,Complete,Complete,Complete,OF,,Missing
+167577C,MSNU2606430,"Ruipedra, World of Natural Stone, S.A.",INTRANSIT,Pending,Complete,Complete,Pending,,"OF, DRAYAGE",Pending
+167671,MSMU2833403,Stone Pro Di Galeazzi Francesco,INTRANSIT,Pending,Pending,Pending,Pending,,"OF, CUSTOMS, DUTY, DRAYAGE",Pending
+168250,MSMU2833403,Stone Pro Di Galeazzi Francesco,INTRANSIT,Pending,Pending,Pending,Pending,,"OF, CUSTOMS, DUTY, DRAYAGE",Pending
+168250B,MSMU2833403,Stone Pro Di Galeazzi Francesco,INTRANSIT,Pending,Pending,Pending,Pending,,"OF, CUSTOMS, DUTY, DRAYAGE",Pending
+168733,GESU1342091,"Apollo Stone Imports, Inc.",INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+168893,MEDU2304983,Marbres Homedes,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+168893B,MEDU2304983,Marbres Homedes,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+168893C,MEDU6299740,Marbres Homedes,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+168893D,MEDU6299740,Marbres Homedes,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+168893E,MEDU3697078,Marbres Homedes,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+168893F,MEDU3697078,Marbres Homedes,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+169063,MSDU2857097,Ceramiche Marca Corona,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+169273,MSDU8402053,Edimax Ceramiche Gruppo Beta S.p.A,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+169273B,MSNU3337994,Edimax Ceramiche Gruppo Beta S.p.A,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+169326,MSNU7395469,Kronos 2 Ceramiche S.p.A,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+169395,UETU3104850,Promomarbre,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+169397,UETU3104850,Promomarbre,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+169571,MSDU1440513,GRESPANIA SA,INTRANSIT,Pending,Pending,Pending,Pending,,"OF, CUSTOMS, DUTY, DRAYAGE",Pending
+169611B,MSNU7395469,Emilceramica S.r.l (dba Emilgroup),INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+169616B,MSNU7395469,Kronos 2 Ceramiche S.p.A,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+169617,MSNU7395469,COEM /FIORENESE,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+169657B,MSDU7956662,"StonePeak Ceramics, Inc",INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+169790B,MSDU8402053,Florim Ceramiche Spa SB,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+169961,CAIU6195977,"Compacstone USA, Inc",INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+169976,FCIU4308603,Ecoceramic Ceramica,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+170016,FTAU1244280,Thor Bahia Granitos LTDA - EPP,INTRANSIT,Pending,Complete,Complete,Pending,,"OF, DRAYAGE",Pending
+170081,MSMU1753221,Decolores Marmores E Granitos Do Brasil Ltda,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+170089,MEDU3110874,Gmp-Graniti Marmi Pietre S.P.A.,INTRANSIT,Missing,Complete,Missing,Missing,"OF, DUTY, DRAYAGE",,Missing
+170107,MSMU1753221,Decolores Marmores E Granitos Do Brasil Ltda,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+170135,MSMU3540210,INFINITY ENGINEERED SURFACE,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+170142,MSDU7956662,41zero42 srl,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+170191,MSNU1343956,Black Eagle Surfaces SRL,INTRANSIT,Pending,Pending,Pending,Pending,,"OF, CUSTOMS, DUTY, DRAYAGE",Pending
+170211,MSNU7395469,Florim Ceramiche Spa SB,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+170278,MSNU3140602,Fincibec S.p.a.,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+170281B,TLLU3415434,Natural Stones S.R.L.,INTRANSIT,Pending,Complete,Complete,Pending,,"OF, DRAYAGE",Pending
+170325,MSDU7956662,Kronos 2 Ceramiche S.p.A,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+170371,TLLU3415434,Natural Stones S.R.L.,INTRANSIT,Pending,Complete,Complete,Pending,,"OF, DRAYAGE",Pending
+170371B,SEGU2963797,Natural Stones S.R.L.,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+170372,SEGU2963797,Natural Stones S.R.L.,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+170394,MSDU7956662,COEM /FIORENESE,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+170394B,MSDU7956662,COEM /FIORENESE,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+170395,MSDU7956662,Kronos 2 Ceramiche S.p.A,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+170395B,MSDU8402053,Kronos 2 Ceramiche S.p.A,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+170396,MSDU7956662,Tuscania S.P.A,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+170445,TGBU6804260,Shunsen Industries Corporation,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+170491,MEDU6282162,Decolores Marmores E Granitos Do Brasil Ltda,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+170520,SEGU2963797,Natural Stones S.R.L.,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+170520B,SEGU2963797,Natural Stones S.R.L.,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+170525,MSDU7956662,Kronos 2 Ceramiche S.p.A,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+170526,MSDU7956662,"StonePeak Ceramics, Inc",INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+170559,MSMU1234761,Brasigran Brasileira de Granitos Ltda,INTRANSIT,Pending,Complete,Complete,Pending,,"OF, DRAYAGE",Pending
+170560,MSMU3159564,Cosmos Stones Dogal Tas Ic Ve Dis Ticaret Limited Sirketi,INTRANSIT,Missing,Complete,Complete,Complete,OF,,Missing
+170567,CRSU1430738,Riva Stone Ltda,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+170568,MSNU7395469,Florim Ceramiche Spa SB,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+170599,MSMU1250145,Riva Stone Ltda,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+170607,CAIU3042742,Riva Stone Ltda,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+170611,MRKU9558661,Global Surfaces FZE,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+170616,MRKU7530916,Global Surfaces FZE,INTRANSIT,Pending,Pending,Pending,Pending,,"OF, CUSTOMS, DUTY, DRAYAGE",Pending
+170620,CAIU3005857,Riva Stone Ltda,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+170621,MSNU7395469,Florim Ceramiche Spa SB,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+170667,INBU3751278,Testi Group s.r.l,INTRANSIT,Pending,Pending,Pending,Pending,,"OF, CUSTOMS, DUTY, DRAYAGE",Pending
+170671,MEDU3110874,Marmoles Man Srl,INTRANSIT,Missing,Complete,Missing,Missing,"OF, DUTY, DRAYAGE",,Missing
+170675,MEDU3870856,Granito Zucchi LTDA,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+170686,MSNU7395469,Kronos 2 Ceramiche S.p.A,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+170690,MSNU3849619,Max Marmi Carrara s.r.l,INTRANSIT,Pending,Complete,Pending,Pending,,"OF, DUTY, DRAYAGE",Pending
+170692,MSNU3849619,Tre Emme Import Export S.R.L,INTRANSIT,Pending,Complete,Pending,Pending,,"OF, DUTY, DRAYAGE",Pending
+170696,HPCU2621975,Thor Bahia Granitos LTDA - EPP,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+170697,MEDU2555295,Thor Bahia Granitos LTDA - EPP,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+170699,MEDU6558203,Thor Bahia Granitos LTDA - EPP,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+170709,FCIU2969902,Granito Zucchi LTDA,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+170822,MEDU3756993,Santo Antonio Granitos LTDA,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+170831,MSNU7395469,Florim Ceramiche Spa SB,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+170841,MSDU4522873,INFINITY ENGINEERED SURFACE,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+170907,TCKU1782585,"Ruipedra, World of Natural Stone, S.A.",INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+170907B,FCIU6443217,"Ruipedra, World of Natural Stone, S.A.",INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+170911,FCIU5805137,"Ruipedra, World of Natural Stone, S.A.",INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+170940,MSDU2926198,Qualita Granitos E Marmores Ltda,INTRANSIT,Pending,Complete,Complete,Pending,,"OF, DRAYAGE",Pending
+170943,MSMU2078540,Granito Zucchi LTDA,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+170944,FCIU4478472,Granito Zucchi LTDA,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+170946,MEDU6027974,Mineral Stone Exportacao Ltda,INTRANSIT,Pending,Complete,Complete,Pending,,"OF, DRAYAGE",Pending
+170978,SEGU2963797,Natural Stones S.R.L.,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+170979,MSMU1056280,Bonotti,INTRANSIT,Pending,Complete,Pending,Pending,,"OF, DUTY, DRAYAGE",Pending
+170979B,XHCU2466631,Bonotti,INTRANSIT,Pending,Pending,Pending,Pending,,"OF, CUSTOMS, DUTY, DRAYAGE",Pending
+170979C,UETU3049557,Bonotti,INTRANSIT,Pending,Pending,Pending,Pending,,"OF, CUSTOMS, DUTY, DRAYAGE",Pending
+170982,TGBU1100078,Viemme Marmi Srl,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+170995,MEDU3110874,IL Fiorino Marmi SRL,INTRANSIT,Missing,Complete,Missing,Missing,"OF, DUTY, DRAYAGE",,Missing
+171007,MSBU2891725,ANTOLINI LUIGI & C. S.P.A.,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+171115,DFSU2940081,Bramagran,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+171118,MSNU7395469,Florim Ceramiche Spa SB,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+171174,SEGU3671280,NIKOLAUS BAGNARA SPA - AG,INTRANSIT,Pending,Pending,Pending,Pending,,"OF, CUSTOMS, DUTY, DRAYAGE",Pending
+171175,FCIU5988655,Total Stone Boutique,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+171189,MSDU2709103,Granito Zucchi LTDA,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+171201,CRSU1397223,Granito Zucchi LTDA,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+171204,MSMU1207869,Brasigran Brasileira de Granitos Ltda,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+171210,TRHU1979741,Qualita Granitos E Marmores Ltda,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+171238,MSMU2089056,Gramil Granitos E Marmores Itapemirim LTDA,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+171239,TLLU2552582,Natural Stones S.R.L.,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+171239B,TLLU2552582,Natural Stones S.R.L.,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+171241,FSCU3468993,Gramil Granitos E Marmores Itapemirim LTDA,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+171266,TCLU2478379,Thor Bahia Granitos LTDA - EPP,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+171267,MSDU2285670,Thor Bahia Granitos LTDA - EPP,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+171359,MSNU7395469,Emilceramica S.r.l (dba Emilgroup),INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+171364,TGCU0143090,Qualita Granitos E Marmores Ltda,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+171365,TCKU3393258,Mineral Stone Exportacao Ltda,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+171369,MEDU6028498,Fortuna Granitos Do Brasil Ltda.,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+171396,MSMU2397315,Decolores Marmores E Granitos Do Brasil Ltda,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+171398,MSDU8402053,COEM /FIORENESE,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+171405,MSDU8402053,Florim Ceramiche Spa SB,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+171479,MSDU8402053,Kronos 2 Ceramiche S.p.A,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+171624,MSDU8402053,COEM /FIORENESE,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+171630,TCLU3660731,Granexpo Do Brasil Granitos LTDA,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+171691,MSDU8402053,Tuscania S.P.A,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+171700,MSMU2241169,Payanini S.R.L.,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+171710,CAIU2935674,Decolores Marmores E Granitos Do Brasil Ltda,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+171722,MEDU3949204,TERLOS STONES LTDA,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+171725,MEDU3949204,TERLOS STONES LTDA,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+171726,MSBU3833934,Marmi Graniti Favorita,INTRANSIT,Pending,Pending,Pending,Pending,,"OF, CUSTOMS, DUTY, DRAYAGE",Pending
+171755,MSMU2101927,Kronos 2 Ceramiche S.p.A,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+171756,TGBU1344515,G.R. Marmi Srl,INTRANSIT,Pending,Pending,Pending,Pending,,"OF, CUSTOMS, DUTY, DRAYAGE",Pending
+171767,MSDU8402053,41zero42 srl,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+171770,MSDU8402053,41zero42 srl,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+171771,MSDU8402053,41zero42 srl,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+171772,MSDU8402053,41zero42 srl,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+171773,MSDU8402053,41zero42 srl,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+171774,MSDU8402053,41zero42 srl,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+171775,MSDU8402053,41zero42 srl,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+171781,MSDU8402053,41zero42 srl,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+171782,MSDU8402053,41zero42 srl,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+171783,MSDU8402053,41zero42 srl,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+171784,MSDU8402053,41zero42 srl,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+171785,MSDU8402053,41zero42 srl,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+171786,MSDU8402053,41zero42 srl,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+171787,MSDU8402053,41zero42 srl,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+171793,MEDU1380952,Granito Zucchi LTDA,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+171816,MSDU8402053,Florim Ceramiche Spa SB,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+171866,MSDU8402053,Florim Ceramiche Spa SB,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+171889,SEGU2963797,Natural Stones S.R.L.,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+171889B,SEGU2963797,Natural Stones S.R.L.,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+171975,MSDU8402053,Florim Ceramiche Spa SB,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+172034,MEDU1380952,Granito Zucchi LTDA,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+172076,MSDU8402053,Florim Ceramiche Spa SB,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+172168,MSMU1005493,Ceramiche Marca Corona,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+172214,GESU1342091,"Apollo Stone Imports, Inc.",INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+172254,MSDU8402053,Emilceramica S.r.l (dba Emilgroup),INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+172257,MSDU8402053,Tuscania S.P.A,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+172264,MSDU8402053,Emilceramica S.r.l (dba Emilgroup),INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+172493,MSDU2447472,PAVESTONE Lda.,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+172500,MSMU2101927,Ceramica Sant Agostino,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+172502,MSMU2101927,Ceramica Sant Agostino,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+172645,BSIU2443290,"Ruipedra, World of Natural Stone, S.A.",INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+172689,MSDU2271125,Bruno Lucchetti Marmi E Graniti Srl,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+172690,MSDU1284560,Granitos Cabaleiro,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+172873,MSMU2101927,Kronos 2 Ceramiche S.p.A,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+173163,MSBU1255457,G.R. Marmi Srl,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing
+173436,MEDU5459340,Franchi Umberto Marmi SPA,INTRANSIT,Missing,Missing,Missing,Missing,"OF, CUSTOMS, DUTY, DRAYAGE",,Missing

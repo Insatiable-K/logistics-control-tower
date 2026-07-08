@@ -42,11 +42,11 @@ def get_engine():
 def load_shipment_mapping(engine):
 
     df = pd.read_sql("SELECT * FROM shipment_mapping", engine)
-
+    
     df["container_id"] = df["container_id"].astype(str).str.strip().str.upper()
     df["po_number"] = pd.to_numeric(df["po_number"], errors="coerce").astype("Int64")
     df["sipl_number"] = df["sipl_number"].astype(str).str.strip()
-
+    
     return df
 
 
@@ -545,6 +545,756 @@ def build_execution_master(engine):
 
     return df
 
+###############################################################################
+# BUILD INVOICE COMPLIANCE
+###############################################################################
+
+def build_invoice_compliance(engine):
+
+    import re
+    from rapidfuzz import process, fuzz
+
+    # -------------------------------------------------------------------------
+    # LOAD TABLES
+    # -------------------------------------------------------------------------
+
+    bills = pd.read_sql(
+        "SELECT * FROM bills",
+        engine
+    )
+
+    gl_bills = pd.read_sql(
+        "SELECT * FROM gl_bills",
+        engine
+    )
+
+    shipment_mapping = load_shipment_mapping(engine)
+
+    # =============================================================================
+    # BUILD MASTER
+    # =============================================================================
+
+    master = (
+        bills[
+            bills["sipl_inv"].notna()
+            &
+            bills["container"].notna()
+        ][
+            [
+                "sipl_inv",
+                "container"
+            ]
+        ]
+        .drop_duplicates()
+    )
+
+    print("MASTER ROWS :", len(master))
+    print("UNIQUE SIPLS :", master["sipl_inv"].nunique())
+    print("UNIQUE CONTAINERS :", master["container"].nunique())
+
+    # =============================================================================
+    # LOOKUP SETS
+    # =============================================================================
+
+    sipl_set = set(
+        master["sipl_inv"]
+        .astype(str)
+        .str.upper()
+    )
+
+    container_set = set(
+        master["container"]
+        .astype(str)
+        .str.upper()
+    )
+
+    # =============================================================================
+    # EXTRACT FROM NOTES
+    # =============================================================================
+
+    def extract_sipl(note):
+
+        if pd.isna(note):
+            return None
+
+        candidates = re.findall(
+            r'(\d{5,6}[A-Z]?)',
+            str(note).upper()
+        )
+
+        matches = [
+            x for x in candidates
+            if x in sipl_set
+        ]
+
+        return matches[0] if matches else None
+
+
+    def extract_container(note):
+
+        if pd.isna(note):
+            return None
+
+        candidates = re.findall(
+            r'([A-Z]{4}\d{7})',
+            str(note).upper()
+        )
+
+        matches = [
+            x for x in candidates
+            if x in container_set
+        ]
+
+        return matches[0] if matches else None
+
+
+    bills["sipl_from_notes"] = (
+        bills["notes"]
+        .apply(extract_sipl)
+    )
+
+    bills["container_from_notes"] = (
+        bills["notes"]
+        .apply(extract_container)
+    )
+
+    # =============================================================================
+    # FINAL SIPL
+    # =============================================================================
+
+    bills["sipl_final"] = bills["sipl_inv"]
+
+    mask = (
+        bills["sipl_final"].isna()
+        &
+        bills["sipl_from_notes"].notna()
+    )
+
+    bills.loc[
+        mask,
+        "sipl_final"
+    ] = bills.loc[
+        mask,
+        "sipl_from_notes"
+    ]
+
+    # =============================================================================
+    # CONTAINER FROM NOTES
+    # =============================================================================
+
+    bills["container_final"] = bills["container"]
+
+    mask = (
+        bills["container_final"].isna()
+        &
+        bills["container_from_notes"].notna()
+    )
+
+    bills.loc[
+        mask,
+        "container_final"
+    ] = bills.loc[
+        mask,
+        "container_from_notes"
+    ]
+
+    # =============================================================================
+    # CONTAINER FROM SIPL MASTER
+    # =============================================================================
+
+    container_map = (
+        master
+        .drop_duplicates("sipl_inv")
+        .set_index("sipl_inv")["container"]
+    )
+
+    bills["container_from_sipl"] = (
+        bills["sipl_final"]
+        .map(container_map)
+    )
+
+    mask = (
+        bills["container_final"].isna()
+        &
+        bills["container_from_sipl"].notna()
+    )
+
+    bills.loc[
+        mask,
+        "container_final"
+    ] = bills.loc[
+        mask,
+        "container_from_sipl"
+    ]
+
+    # =============================================================================
+    # RESULTS
+    # =============================================================================
+
+    print("\nSIPL RESULTS")
+    print("Original :", bills["sipl_inv"].notna().sum())
+    print("Final    :", bills["sipl_final"].notna().sum())
+    print(
+        "Recovered:",
+        bills["sipl_final"].notna().sum()
+        -
+        bills["sipl_inv"].notna().sum()
+    )
+
+    print("\nCONTAINER RESULTS")
+    print("Original :", bills["container"].notna().sum())
+    print("Final    :", bills["container_final"].notna().sum())
+    print(
+        "Recovered:",
+        bills["container_final"].notna().sum()
+        -
+        bills["container"].notna().sum()
+    )
+
+    # =============================================================================
+    # CONTAINER-LINKED BILLS
+    # =============================================================================
+
+    container_bills = bills[
+        bills["container_final"].notna()
+    ].copy()
+
+    print("\nCONTAINER BILLS :", container_bills.shape)
+
+    print(
+        "UNIQUE CONTAINERS :",
+        container_bills["container_final"].nunique()
+    )
+
+    # =============================================================================
+    # CONTAINER BILLING PROFILE
+    # =============================================================================
+
+    container_profile = (
+        container_bills
+        .groupby("container")
+        .agg(
+            sipls=("sipl_inv", "nunique"),
+            bills=("bill_inv", "nunique")
+        )
+        .reset_index()
+    )
+
+    container_profile["bills_per_sipl"] = (
+        container_profile["bills"] /
+        container_profile["sipls"]
+    ).round(2)
+
+    container_profile["sipls_per_bill"] = (
+        container_profile["sipls"] /
+        container_profile["bills"]
+    ).round(2)
+
+    # Classification
+    container_profile["status"] = "1:1"
+
+    container_profile.loc[
+        container_profile["bills"] > container_profile["sipls"],
+        "status"
+    ] = "Multiple Bills"
+
+    container_profile.loc[
+        container_profile["bills"] < container_profile["sipls"],
+        "status"
+    ] = "Missing Bills?"
+
+
+    # =============================================================================
+    # FINAL BILLS DATASET
+    # =============================================================================
+
+    container_bills = container_bills.drop(
+        columns=[
+            "supplier",
+            "sipl_inv",
+            "container",
+            "notes",
+            "sipl_from_notes",
+            "container_from_notes",
+            "container_from_sipl"
+        ],
+        errors="ignore"
+    )
+
+    container_bills = container_bills.rename(
+        columns={
+            "sipl_final": "sipl",
+            "container_final": "container"
+        }
+    )
+
+    print("\nFINAL BILLS COLUMNS")
+    for col in container_bills.columns:
+        print(col)
+
+    # =============================================================================
+    # GL BILLS
+    # =============================================================================
+
+    gl_bills = gl_bills[
+        gl_bills["type"] == "Bill"
+    ].copy()
+
+    # =============================================================================
+    # CLEAN DESCRIPTION
+    # =============================================================================
+
+    gl_bills["description_clean"] = (
+        gl_bills["description"]
+        .str.upper()
+        .str.strip()
+    )
+
+    # Remove PO references
+    po_mask = gl_bills["description_clean"].str.contains(
+        r"PO",
+        case=False,
+        na=False
+    )
+
+    gl_bills.loc[
+        po_mask,
+        "description_clean"
+    ] = pd.NA
+
+    # Standardize categories
+    gl_bills["description_clean"] = (
+        gl_bills["description_clean"]
+        .replace({
+            "OCEAN FREIGHT": "OF",
+            "AIR FREIGHT": "OF",
+            "MIS": "MISC"
+        })
+    )
+
+    # Drop blank descriptions
+    gl_bills = gl_bills[
+        gl_bills["description_clean"].notna()
+    ].copy()
+
+    print("GL BILLS :", gl_bills.shape)
+
+    print(
+        gl_bills["description_clean"]
+        .value_counts()
+    )
+
+    # =============================================================================
+    # STEP 1 - MATCH BILLS TO GL
+    # =============================================================================
+
+    matched_bills = container_bills.merge(
+        gl_bills,
+        left_on="bill_inv",
+        right_on="invoice",
+        how="left"
+    )
+
+    print("\nMATCHED TO GL")
+    print(matched_bills.shape)
+
+    # =============================================================================
+    # STEP 2 - LOAD SHIPMENT MAPPING
+    # =============================================================================
+
+    shipment_mapping = pd.read_sql(
+        """
+        SELECT
+            container_id,
+            po_number,
+            sipl_number
+        FROM shipment_mapping
+        """,
+        engine
+    )
+
+    shipment_mapping = shipment_mapping.rename(
+        columns={
+            "container_id": "container",
+            "sipl_number": "sipl"
+        }
+    )
+
+    shipment_mapping["container"] = (
+        shipment_mapping["container"]
+        .astype(str)
+        .str.upper()
+        .str.strip()
+    )
+
+    shipment_mapping["sipl"] = (
+        shipment_mapping["sipl"]
+        .astype(str)
+        .str.upper()
+        .str.strip()
+    )
+
+    shipment_mapping = shipment_mapping.drop_duplicates()
+
+    print("\nSHIPMENT MAPPING")
+    print(shipment_mapping.shape)
+
+    # =============================================================================
+    # STEP 3 - MAP PO TO EVERY BILL
+    # =============================================================================
+
+    matched_bills = matched_bills.merge(
+        shipment_mapping,
+        on=[
+            "container",
+            "sipl"
+        ],
+        how="left"
+    )
+
+    print("\nMATCHED BILLS")
+    print(matched_bills.shape)
+
+    # =============================================================================
+    # STEP 4 - NORMALIZE BILL TYPES
+    # =============================================================================
+
+    from rapidfuzz import process, fuzz
+
+    matched_bills["description_clean"] = (
+        matched_bills["description_clean"]
+        .fillna("")
+        .astype(str)
+        .str.upper()
+        .str.strip()
+    )
+
+    VALID_TYPES = [
+        "OF",
+        "CUSTOMS",
+        "DUTY",
+        "DRAYAGE"
+    ]
+
+    def normalize_bill_type(text):
+
+        if text == "":
+            return None
+
+        # ----------------------------------------------------------
+        # OCEAN FREIGHT
+        # ----------------------------------------------------------
+
+        if text == "OF":
+            return "OF"
+
+        if "OCEAN" in text:
+            return "OF"
+
+        if "AIR FREIGHT" in text:
+            return "OF"
+
+        if "AIRFREIGHT" in text:
+            return "OF"
+
+        # ----------------------------------------------------------
+        # CUSTOMS
+        # ----------------------------------------------------------
+
+        if "CUSTOM" in text:
+            return "CUSTOMS"
+
+        # ----------------------------------------------------------
+        # DUTY
+        # ----------------------------------------------------------
+
+        if "DUTY" in text:
+            return "DUTY"
+
+        # ----------------------------------------------------------
+        # DRAYAGE
+        # ----------------------------------------------------------
+
+        if "DRAY" in text:
+            return "DRAYAGE"
+
+        # ----------------------------------------------------------
+        # FUZZY MATCH (TYPO RECOVERY)
+        # ----------------------------------------------------------
+
+        match = process.extractOne(
+            text,
+            VALID_TYPES,
+            scorer=fuzz.ratio
+        )
+
+        if match:
+
+            value, score, _ = match
+
+            if score >= 85:
+                return value
+
+        return None
+
+
+    matched_bills["bill_type"] = (
+        matched_bills["description_clean"]
+        .apply(normalize_bill_type)
+    )
+    # =============================================================================
+    # STEP 4A - FLAG PENDING BILLS
+    # =============================================================================
+    
+    matched_bills["is_pending"] = (
+        matched_bills["bill_inv"]
+        .fillna("")
+        .astype(str)
+        .str.upper()
+        .str.strip()
+        .eq("PENDING")
+    )
+    
+    print("\nPending Bills")
+    print(
+        matched_bills["is_pending"]
+        .value_counts()
+    )
+
+    # =============================================================================
+    # STEP 5 - QC
+    # =============================================================================
+
+    print("\n" + "=" * 80)
+    print("NORMALIZED BILL TYPES")
+    print("=" * 80)
+
+    print(
+        matched_bills["bill_type"]
+        .value_counts(dropna=False)
+    )
+
+    print("\nUNCLASSIFIED DESCRIPTIONS")
+    print("-" * 80)
+
+    print(
+        matched_bills.loc[
+            matched_bills["bill_type"].isna(),
+            "description_clean"
+        ]
+        .value_counts()
+    )
+
+    # =============================================================================
+    # STEP 6 - KEEP ONLY COMPLIANCE BILLS
+    # =============================================================================
+
+    compliance_bills = matched_bills[
+        matched_bills["bill_type"].notna()
+    ].copy()
+
+    print("\n" + "=" * 80)
+    print("COMPLIANCE DATASET")
+    print("=" * 80)
+
+    print("Rows                :", len(compliance_bills))
+    print("Unique Containers   :", compliance_bills["container"].nunique())
+    print("Unique SIPLs        :", compliance_bills["sipl"].nunique())
+    print("Unique POs          :", compliance_bills["po_number"].nunique())
+    print("Unique Bills        :", compliance_bills["bill_inv"].nunique())
+
+    print("\nBILL TYPE BREAKDOWN")
+    print(
+        compliance_bills["bill_type"]
+        .value_counts()
+    )
+
+    # -------------------------------------------------------------------------
+    # BUILD COMPLIANCE MATRIX
+    # -------------------------------------------------------------------------
+    
+    required = [
+        "OF",
+        "CUSTOMS",
+        "DUTY",
+        "DRAYAGE"
+    ]
+    
+    # One record per Container + PO + Bill Type
+    invoice_matrix = (
+        compliance_bills
+        .groupby(
+            [
+                "container",
+                "po_number",
+                "bill_type"
+            ]
+        )
+        .agg(
+            bill_exists=(
+                "is_pending",
+                lambda x: (~x).any()
+            ),
+            pending_exists=(
+                "is_pending",
+                "any"
+            )
+        )
+        .reset_index()
+    )
+    
+    # Pivot Actual Bills
+    actual = (
+        invoice_matrix
+        .pivot_table(
+            index=[
+                "container",
+                "po_number"
+            ],
+            columns="bill_type",
+            values="bill_exists",
+            fill_value=False
+        )
+    )
+    
+    actual.columns = [
+        f"{c}_ACTUAL"
+        for c in actual.columns
+    ]
+    
+    # Pivot Pending Bills
+    pending = (
+        invoice_matrix
+        .pivot_table(
+            index=[
+                "container",
+                "po_number"
+            ],
+            columns="bill_type",
+            values="pending_exists",
+            fill_value=False
+        )
+    )
+    
+    pending.columns = [
+        f"{c}_PENDING"
+        for c in pending.columns
+    ]
+    
+    # Combine
+    invoice_matrix = (
+        pd.concat(
+            [
+                actual,
+                pending
+            ],
+            axis=1
+        )
+        .reset_index()
+    )
+    
+    # Ensure every bill exists
+    for bill in required:
+    
+        if f"{bill}_ACTUAL" not in invoice_matrix.columns:
+            invoice_matrix[f"{bill}_ACTUAL"] = False
+    
+        if f"{bill}_PENDING" not in invoice_matrix.columns:
+            invoice_matrix[f"{bill}_PENDING"] = False
+    
+    
+    # ------------------------------------------------------------
+    # ------------------------------------------------------------
+    # MISSING BILL LOGIC
+    # ------------------------------------------------------------
+    
+    def get_missing(row):
+    
+        missing = []
+    
+        for bill in required:
+    
+            actual = row[f"{bill}_ACTUAL"]
+            pending = row[f"{bill}_PENDING"]
+    
+            # Missing only if neither an actual bill
+            # nor a pending placeholder exists
+            if (not actual) and (not pending):
+                missing.append(bill)
+    
+        return ", ".join(missing)
+    
+    
+    # ------------------------------------------------------------
+    # PENDING BILL LOGIC
+    # ------------------------------------------------------------
+    
+    def get_pending(row):
+    
+        pending_list = []
+    
+        for bill in required:
+    
+            actual = row[f"{bill}_ACTUAL"]
+            pending = row[f"{bill}_PENDING"]
+    
+            # Show only bills that are still pending
+            if pending and not actual:
+                pending_list.append(bill)
+    
+        return ", ".join(pending_list)
+    
+    
+    # ------------------------------------------------------------
+    # FINAL FLAGS
+    # ------------------------------------------------------------
+    
+    invoice_matrix["missing_bills"] = (
+        invoice_matrix.apply(
+            get_missing,
+            axis=1
+        )
+    )
+    
+    invoice_matrix["pending_bills"] = (
+        invoice_matrix.apply(
+            get_pending,
+            axis=1
+        )
+    )
+    
+    invoice_matrix["invoice_ready"] = (
+        invoice_matrix["missing_bills"] == ""
+    )
+        
+    return invoice_matrix
+###############################################################################
+# ARRIVING CONTAINERS WITH MISSING INVOICES
+###############################################################################
+
+def get_arriving_invoice_risk(df_exec, invoice_compliance, days=3):
+    today = pd.Timestamp.today().normalize()
+    
+    arriving = df_exec[
+        (df_exec["port_eta"] >= today) &
+        (df_exec["port_eta"] <= today + pd.Timedelta(days=days))
+    ].copy()
+    
+    arriving = arriving.merge(
+        invoice_compliance,
+        left_on=["container_id", "po_number"],
+        right_on=["container", "po_number"],
+        how="left"
+    )
+    
+    # FIX: If a container has NO bills at all, populate all required fields as missing
+    all_required_bills = ", ".join(["OF", "CUSTOMS", "DUTY", "DRAYAGE"])
+    arriving["missing_bills"] = arriving["missing_bills"].fillna(all_required_bills)
+    arriving["invoice_ready"] = arriving["invoice_ready"].fillna(False)
+    
+    risk = arriving[arriving["invoice_ready"] != True].copy()
+    
+    return risk
 
 # =============================================================================
 # =============================== KPI LAYER ====================================
@@ -557,26 +1307,26 @@ def get_total_containers(df):
     return df["container_id"].nunique()
 
 
-# -----------------------------------------------------------------------------
-# CONTAINERS ON WATER (TIME-BASED)
-# -----------------------------------------------------------------------------
+    # -----------------------------------------------------------------------------
+    # CONTAINERS ON WATER (TIME-BASED)
+    # -----------------------------------------------------------------------------
 def get_containers_on_water(df):
     today = pd.Timestamp.today().normalize()
     return df[df["port_eta"] >= today]["container_id"].nunique()
 
 
-# -----------------------------------------------------------------------------
-# ARRIVING TODAY
-# -----------------------------------------------------------------------------
+    # -----------------------------------------------------------------------------
+    # ARRIVING TODAY
+    # -----------------------------------------------------------------------------
 def get_arriving_today(df):
     today = pd.Timestamp.today().normalize()
     return df[df["port_eta"].dt.normalize() == today]["container_id"].nunique()
 
 
-# -----------------------------------------------------------------------------
-# CURRENT WEEK ARRIVALS
-# FIX: use .dt.isocalendar().week safely — also handle NaT rows
-# -----------------------------------------------------------------------------
+    # -----------------------------------------------------------------------------
+    # CURRENT WEEK ARRIVALS
+    # FIX: use .dt.isocalendar().week safely — also handle NaT rows
+    # -----------------------------------------------------------------------------
 def get_current_week_arrivals(df):
     today = pd.Timestamp.today()
     current_week = today.isocalendar()[1]
@@ -592,9 +1342,9 @@ def get_current_week_arrivals(df):
     return matched["container_id"].nunique()
 
 
-# -----------------------------------------------------------------------------
-# NEXT 7 DAYS ARRIVALS
-# -----------------------------------------------------------------------------
+    # -----------------------------------------------------------------------------
+    # NEXT 7 DAYS ARRIVALS
+    # -----------------------------------------------------------------------------
 def get_next_7_days_arrivals(df):
     today = pd.Timestamp.today().normalize()
 
@@ -604,9 +1354,9 @@ def get_next_7_days_arrivals(df):
     ]["container_id"].nunique()
 
 
-# -----------------------------------------------------------------------------
-# 7 DAY ARRIVAL EXCEPTION (NOT READY)
-# -----------------------------------------------------------------------------
+    # -----------------------------------------------------------------------------
+    # 7 DAY ARRIVAL EXCEPTION (NOT READY)
+    # -----------------------------------------------------------------------------
 def get_7day_not_ready(df):
 
     today = pd.Timestamp.today().normalize()
@@ -629,10 +1379,10 @@ def get_7day_not_ready(df):
     ]["container_id"].nunique()
 
 
-# -----------------------------------------------------------------------------
-# NEED INVOICE
-# FIX: case-insensitive check for "INVOICE" in sipl_status
-# -----------------------------------------------------------------------------
+    # -----------------------------------------------------------------------------
+    # NEED INVOICE
+    # FIX: case-insensitive check for "INVOICE" in sipl_status
+    # -----------------------------------------------------------------------------
 def get_invoice_needed(df):
     if "sipl_status" not in df.columns:
         return 0
@@ -641,18 +1391,18 @@ def get_invoice_needed(df):
     ]["container_id"].nunique()
 
 
-# -----------------------------------------------------------------------------
-# LOCATION ETA REACHED
-# -----------------------------------------------------------------------------
+    # -----------------------------------------------------------------------------
+    # LOCATION ETA REACHED
+    # -----------------------------------------------------------------------------
 def get_location_reached(df):
     today = pd.Timestamp.today().normalize()
     return df[
         df["delivery_eta"].notna() & (df["delivery_eta"] <= today)
     ]["container_id"].nunique()
 
-# -----------------------------------------------------------------------------
-# LOCATION ETA — NEXT 7 DAYS
-# -----------------------------------------------------------------------------
+    # -----------------------------------------------------------------------------
+    # LOCATION ETA — NEXT 7 DAYS
+    # -----------------------------------------------------------------------------
 def get_location_next_7_days(df):
 
     today = pd.Timestamp.today().normalize()
@@ -664,9 +1414,9 @@ def get_location_next_7_days(df):
     ]["container_id"].nunique()
 
 
-# -----------------------------------------------------------------------------
-# DELIVERY DONE BUT STATUS NOT UPDATED
-# -----------------------------------------------------------------------------
+    # -----------------------------------------------------------------------------
+    # DELIVERY DONE BUT STATUS NOT UPDATED
+    # -----------------------------------------------------------------------------
 def get_status_lag(df):
 
     today = pd.Timestamp.today().normalize()
@@ -684,10 +1434,10 @@ def get_status_lag(df):
     ]["container_id"].nunique()
 
 
-# -----------------------------------------------------------------------------
-# LFD BREACH (BUSINESS LOGIC)
-# FIX: both columns must be non-null for comparison to be meaningful
-# -----------------------------------------------------------------------------
+    # -----------------------------------------------------------------------------
+    # LFD BREACH (BUSINESS LOGIC)
+    # FIX: both columns must be non-null for comparison to be meaningful
+    # -----------------------------------------------------------------------------
 def get_lfd_breach(df):
     mask = df["lfd"].notna() & df["delivery_eta"].notna()
     return df[mask & (df["lfd"] < df["delivery_eta"])]["container_id"].nunique()

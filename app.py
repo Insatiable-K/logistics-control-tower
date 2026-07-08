@@ -17,17 +17,24 @@ from logic import (
     get_rollover_summary,
     get_container_data_issues,
     get_lfd_risk,
+    build_invoice_compliance,
+    get_arriving_invoice_risk,
 )
 
-tab1, tab2 = st.tabs(["📦 Booking", "🚢 Container Movement"])
+# =============================================================================
+# CONFIG (must be the first Streamlit command in the script)
+# =============================================================================
+st.set_page_config(layout="wide")
+
+tab1, tab2, tab3 = st.tabs([
+    "📦 Booking",
+    "🚢 Container Movement",
+    "🧾 Invoice Compliance"
+])
 
 with tab1:
     
     
-    # =============================================================================
-    # CONFIG
-    # =============================================================================
-    st.set_page_config(layout="wide")
     st.title("📦 Booking Performance Dashboard")
     
     # =============================================================================
@@ -35,6 +42,7 @@ with tab1:
     # =============================================================================
     engine = get_engine()
     bookings = load_bookings(engine)
+    
     
     # =============================================================================
     # CLEAN DATA
@@ -207,7 +215,7 @@ with tab1:
     today = pd.Timestamp.today()
     
     today_sailed = latest_etd_df[
-        latest_etd_df["etd"].astype(str).str[:10] == today.date()
+        latest_etd_df["etd"].dt.normalize() == today.normalize()
     ]["container_id"].nunique()
     
     # =============================================================================
@@ -812,6 +820,129 @@ with tab2:
 
     else:
         st.info("No delay data available")
+        
+with tab3:
+
+    st.title("🧾 Invoice Compliance Dashboard")
+
+    invoice_compliance = build_invoice_compliance(engine)
+
+    invoice_risk = get_arriving_invoice_risk(
+        df_exec,
+        invoice_compliance,
+        days=3
+    )
+
+    # ==========================================================
+    # KPI
+    # ==========================================================
+
+    total_arriving = invoice_risk["container_id"].nunique()
+
+    missing_mask = (
+        invoice_risk["missing_bills"]
+        .fillna("")
+        .str.strip()
+        .ne("")
+    )
+
+    pending_mask = (
+        invoice_risk["pending_bills"]
+        .fillna("")
+        .str.strip()
+        .ne("")
+    )
+
+    col1, col2, col3 = st.columns(3)
+
+    col1.metric(
+        "Containers Arriving (Next 3 Days)",
+        total_arriving
+    )
+
+    col2.metric(
+        "Containers Missing Bills",
+        invoice_risk.loc[
+            missing_mask,
+            "container_id"
+        ].nunique()
+    )
+
+    col3.metric(
+        "Containers With Pending Bills",
+        invoice_risk.loc[
+            pending_mask,
+            "container_id"
+        ].nunique()
+    )
+
+    # ==========================================================
+    # MISSING BILLS
+    # ==========================================================
+
+    st.subheader("🔴 Containers Missing Bills")
+
+    missing_df = invoice_risk.loc[
+        missing_mask,
+        [
+            "container_id",
+            "po_number",
+            "port_eta",
+            "missing_bills"
+        ]
+    ].drop_duplicates()
+
+    if not missing_df.empty:
+
+        missing_df["port_eta"] = (
+            pd.to_datetime(
+                missing_df["port_eta"],
+                errors="coerce"
+            ).dt.strftime("%Y-%m-%d")
+        )
+
+        st.dataframe(
+            missing_df.sort_values("port_eta"),
+            use_container_width=True
+        )
+
+    else:
+
+        st.success("No containers are missing required bills.")
+
+    # ==========================================================
+    # PENDING BILLS
+    # ==========================================================
+
+    st.subheader("🟡 Containers With Pending Bills")
+
+    pending_df = invoice_risk.loc[
+        pending_mask,
+        [
+            "container_id",
+            "po_number",
+            "port_eta",
+            "pending_bills"
+        ]
+    ].drop_duplicates()
+
+    if not pending_df.empty:
+
+        pending_df["port_eta"] = (
+            pd.to_datetime(
+                pending_df["port_eta"],
+                errors="coerce"
+            ).dt.strftime("%Y-%m-%d")
+        )
+
+        st.dataframe(
+            pending_df.sort_values("port_eta"),
+            use_container_width=True
+        )
+
+    else:
+
+        st.success("No pending placeholder bills.")
         
         
 # =============================================================================

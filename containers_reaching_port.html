@@ -1,0 +1,1513 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Invoice Compliance - Containers Reaching Port</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #f5f5f5; padding: 20px; }
+        .container { max-width: 1400px; margin: 0 auto; }
+        h1 { color: #1a1a1a; margin-bottom: 30px; font-size: 28px; }
+
+        .summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin-bottom: 30px; }
+        .card { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .card h3 { font-size: 14px; color: #666; margin-bottom: 10px; font-weight: normal; }
+        .card .number { font-size: 36px; font-weight: bold; }
+        .card.complete .number { color: #28a745; }
+        .card.pending .number { color: #ffc107; }
+        .card.missing .number { color: #dc3545; }
+        .card .percent { font-size: 14px; color: #999; margin-top: 5px; }
+
+        .filters { display: flex; gap: 10px; margin-bottom: 20px; flex-wrap: wrap; }
+        .filter-btn { padding: 8px 16px; border: 2px solid #ddd; background: white; border-radius: 4px; cursor: pointer; font-size: 14px; transition: all 0.3s; }
+        .filter-btn:hover { border-color: #007bff; }
+        .filter-btn.active { background: #007bff; color: white; border-color: #007bff; }
+
+        table { width: 100%; border-collapse: collapse; background: white; box-shadow: 0 2px 4px rgba(0,0,0,0.1); border-radius: 8px; overflow: hidden; }
+        thead { background: #f8f9fa; border-bottom: 2px solid #dee2e6; }
+        th { padding: 15px; text-align: left; font-weight: 600; color: #333; font-size: 13px; text-transform: uppercase; }
+        td { padding: 15px; border-bottom: 1px solid #dee2e6; color: #333; font-size: 14px; }
+        tr:hover { background: #f8f9fa; }
+
+        .status-badge { display: inline-block; padding: 6px 12px; border-radius: 20px; font-size: 12px; font-weight: 600; }
+        .status-complete { background: #d4edda; color: #155724; }
+        .status-pending { background: #fff3cd; color: #856404; }
+        .status-missing { background: #f8d7da; color: #721c24; }
+
+        tr.row-complete { background: #f1f9f6; }
+        tr.row-pending { background: #fffbf0; }
+        tr.row-missing { background: #fef5f5; }
+
+        .categories { font-size: 12px; color: #666; max-width: 250px; word-break: break-word; }
+        .supplier { max-width: 200px; word-break: break-word; }
+        .eta { font-weight: 500; color: #007bff; }
+
+        .info-box { background: #d1ecf1; border-left: 4px solid #0c5460; padding: 15px; margin-bottom: 20px; border-radius: 4px; }
+        .info-box h4 { color: #0c5460; margin-bottom: 8px; }
+        .info-box p { color: #0c5460; font-size: 13px; line-height: 1.6; }
+
+        .no-results { text-align: center; padding: 40px; color: #999; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>Invoice Compliance: Containers Reaching Port</h1>
+
+    <div class="info-box">
+        <h4>Status Definitions</h4>
+        <p><strong>Complete:</strong> All 4 invoice categories (Ocean Freight, Customs, Duty, Drayage) have GL entries</p>
+        <p><strong>Pending:</strong> Some categories lack GL entries but have PENDING bill markers (invoice team awaiting vendor)</p>
+        <p><strong>Missing:</strong> Some categories have no GL entry and no PENDING marker (invoice not yet received)</p>
+    </div>
+
+    <div class="summary">
+        <div class="card complete">
+            <h3>Complete</h3>
+            <div class="number">4</div>
+            <div class="percent">4.8%</div>
+        </div>
+        <div class="card pending">
+            <h3>Pending</h3>
+            <div class="number">28</div>
+            <div class="percent">33.3%</div>
+        </div>
+        <div class="card missing">
+            <h3>Missing</h3>
+            <div class="number">52</div>
+            <div class="percent">61.9%</div>
+        </div>
+        <div class="card">
+            <h3>Total SIPLs</h3>
+            <div class="number">84</div>
+            <div class="percent">Reaching Port 2-7 days</div>
+        </div>
+    </div>
+
+    <div class="filters">
+        <button class="filter-btn active" onclick="filterTable('all')">All (84)</button>
+        <button class="filter-btn" onclick="filterTable('complete')">Complete (4)</button>
+        <button class="filter-btn" onclick="filterTable('pending')">Pending (28)</button>
+        <button class="filter-btn" onclick="filterTable('missing')">Missing (52)</button>
+    </div>
+
+    <table id="complianceTable">
+        <thead>
+            <tr>
+                <th>SIPL</th>
+                <th>Container</th>
+                <th>Supplier</th>
+                <th>Port ETA</th>
+                <th>Overall Status</th>
+                <th>OF</th>
+                <th>Customs</th>
+                <th>Duty</th>
+                <th>Drayage</th>
+                <th>Missing Categories</th>
+                <th>Pending Categories</th>
+            </tr>
+        </thead>
+        <tbody id="tableBody">
+        </tbody>
+    </table>
+</div>
+
+<script>
+    // Compliance data - will be populated by Python
+    const data = [
+  {
+    "sipl": "145739",
+    "container": "CAIU6195977",
+    "supplier": "Compacstone USA, Inc",
+    "status": "INTRANSIT",
+    "port_eta": "7/12/2026",
+    "location_eta": "7/19/2026",
+    "sipl_status": "Documents Sent",
+    "Ocean Freight_status": "Missing",
+    "Customs_status": "Missing",
+    "Duty_status": "Missing",
+    "Drayage_status": "Missing",
+    "overall_status": "Missing",
+    "missing_categories": "Ocean Freight, Customs, Duty, Drayage",
+    "pending_categories": ""
+  },
+  {
+    "sipl": "153390",
+    "container": "CAIU6195977",
+    "supplier": "Compacstone USA, Inc",
+    "status": "INTRANSIT",
+    "port_eta": "7/12/2026",
+    "location_eta": "7/19/2026",
+    "sipl_status": "Documents Sent",
+    "Ocean Freight_status": "Missing",
+    "Customs_status": "Missing",
+    "Duty_status": "Missing",
+    "Drayage_status": "Missing",
+    "overall_status": "Missing",
+    "missing_categories": "Ocean Freight, Customs, Duty, Drayage",
+    "pending_categories": ""
+  },
+  {
+    "sipl": "155507C",
+    "container": "MSBU1828245",
+    "supplier": "CTM DOGAL TAS IC VE DIS TICARET ANONIM SIRKETI",
+    "status": "INTRANSIT",
+    "port_eta": "6/10/2026",
+    "location_eta": "6/26/2026",
+    "sipl_status": "At branch",
+    "Ocean Freight_status": "Complete",
+    "Customs_status": "Complete",
+    "Duty_status": "Complete",
+    "Drayage_status": "Complete",
+    "overall_status": "Complete",
+    "missing_categories": "",
+    "pending_categories": ""
+  },
+  {
+    "sipl": "155674",
+    "container": "MRKU7248456",
+    "supplier": "Global Surfaces Limited - Quartz",
+    "status": "INTRANSIT",
+    "port_eta": "7/10/2026",
+    "location_eta": "7/17/2026",
+    "sipl_status": "D.Os  Received",
+    "Ocean Freight_status": "Complete",
+    "Customs_status": "Pending",
+    "Duty_status": "Pending",
+    "Drayage_status": "Pending",
+    "overall_status": "Pending",
+    "missing_categories": "",
+    "pending_categories": "Customs, Duty, Drayage"
+  },
+  {
+    "sipl": "155761",
+    "container": "HASU1030259",
+    "supplier": "Quantra Natural Quartz Surfaces UNIT 2 | Pokarna Engineered Stone Limited",
+    "status": "INTRANSIT",
+    "port_eta": "7/2/2026",
+    "location_eta": "7/7/2026",
+    "sipl_status": "Delivery Pending",
+    "Ocean Freight_status": "Complete",
+    "Customs_status": "Pending",
+    "Duty_status": "Pending",
+    "Drayage_status": "Pending",
+    "overall_status": "Pending",
+    "missing_categories": "",
+    "pending_categories": "Customs, Duty, Drayage"
+  },
+  {
+    "sipl": "155933B",
+    "container": "SEGU3671280",
+    "supplier": "NIKOLAUS BAGNARA SPA - AG",
+    "status": "INTRANSIT",
+    "port_eta": "7/9/2026",
+    "location_eta": "7/16/2026",
+    "sipl_status": "SIPL Ready",
+    "Ocean Freight_status": "Complete",
+    "Customs_status": "Pending",
+    "Duty_status": "Pending",
+    "Drayage_status": "Pending",
+    "overall_status": "Pending",
+    "missing_categories": "",
+    "pending_categories": "Customs, Duty, Drayage"
+  },
+  {
+    "sipl": "156256",
+    "container": "MEDU3198757",
+    "supplier": "Quantra Natural Quartz Surfaces UNIT 2 | Pokarna Engineered Stone Limited",
+    "status": "INTRANSIT",
+    "port_eta": "7/10/2026",
+    "location_eta": "7/17/2026",
+    "sipl_status": "D.Os  Received",
+    "Ocean Freight_status": "Missing",
+    "Customs_status": "Missing",
+    "Duty_status": "Missing",
+    "Drayage_status": "Missing",
+    "overall_status": "Missing",
+    "missing_categories": "Ocean Freight, Customs, Duty, Drayage",
+    "pending_categories": ""
+  },
+  {
+    "sipl": "156353B",
+    "container": "MSBU1828245",
+    "supplier": "CTM DOGAL TAS IC VE DIS TICARET ANONIM SIRKETI",
+    "status": "INTRANSIT",
+    "port_eta": "6/10/2026",
+    "location_eta": "6/26/2026",
+    "sipl_status": "At branch",
+    "Ocean Freight_status": "Complete",
+    "Customs_status": "Complete",
+    "Duty_status": "Complete",
+    "Drayage_status": "Complete",
+    "overall_status": "Complete",
+    "missing_categories": "",
+    "pending_categories": ""
+  },
+  {
+    "sipl": "159840",
+    "container": "MRKU8892801",
+    "supplier": "QuartzKraft LLP",
+    "status": "INTRANSIT",
+    "port_eta": "7/1/2026",
+    "location_eta": "7/7/2026",
+    "sipl_status": "At branch",
+    "Ocean Freight_status": "Complete",
+    "Customs_status": "Pending",
+    "Duty_status": "Pending",
+    "Drayage_status": "Pending",
+    "overall_status": "Pending",
+    "missing_categories": "",
+    "pending_categories": "Customs, Duty, Drayage"
+  },
+  {
+    "sipl": "159840B",
+    "container": "MRKU8892801",
+    "supplier": "QuartzKraft LLP",
+    "status": "INTRANSIT",
+    "port_eta": "7/1/2026",
+    "location_eta": "7/7/2026",
+    "sipl_status": "At branch",
+    "Ocean Freight_status": "Complete",
+    "Customs_status": "Pending",
+    "Duty_status": "Pending",
+    "Drayage_status": "Pending",
+    "overall_status": "Pending",
+    "missing_categories": "",
+    "pending_categories": "Customs, Duty, Drayage"
+  },
+  {
+    "sipl": "159840C",
+    "container": "MRKU8892801",
+    "supplier": "QuartzKraft LLP",
+    "status": "INTRANSIT",
+    "port_eta": "7/1/2026",
+    "location_eta": "7/7/2026",
+    "sipl_status": "At branch",
+    "Ocean Freight_status": "Complete",
+    "Customs_status": "Pending",
+    "Duty_status": "Pending",
+    "Drayage_status": "Pending",
+    "overall_status": "Pending",
+    "missing_categories": "",
+    "pending_categories": "Customs, Duty, Drayage"
+  },
+  {
+    "sipl": "159842",
+    "container": "MSKU5752243",
+    "supplier": "QuartzKraft LLP",
+    "status": "INTRANSIT",
+    "port_eta": "7/1/2026",
+    "location_eta": "7/8/2026",
+    "sipl_status": "At branch",
+    "Ocean Freight_status": "Complete",
+    "Customs_status": "Pending",
+    "Duty_status": "Pending",
+    "Drayage_status": "Pending",
+    "overall_status": "Pending",
+    "missing_categories": "",
+    "pending_categories": "Customs, Duty, Drayage"
+  },
+  {
+    "sipl": "159842B",
+    "container": "MSKU5752243",
+    "supplier": "QuartzKraft LLP",
+    "status": "INTRANSIT",
+    "port_eta": "7/1/2026",
+    "location_eta": "7/8/2026",
+    "sipl_status": "At branch",
+    "Ocean Freight_status": "Complete",
+    "Customs_status": "Pending",
+    "Duty_status": "Pending",
+    "Drayage_status": "Pending",
+    "overall_status": "Pending",
+    "missing_categories": "",
+    "pending_categories": "Customs, Duty, Drayage"
+  },
+  {
+    "sipl": "159842C",
+    "container": "MSKU5752243",
+    "supplier": "QuartzKraft LLP",
+    "status": "INTRANSIT",
+    "port_eta": "7/1/2026",
+    "location_eta": "7/8/2026",
+    "sipl_status": "At branch",
+    "Ocean Freight_status": "Complete",
+    "Customs_status": "Pending",
+    "Duty_status": "Pending",
+    "Drayage_status": "Pending",
+    "overall_status": "Pending",
+    "missing_categories": "",
+    "pending_categories": "Customs, Duty, Drayage"
+  },
+  {
+    "sipl": "159843",
+    "container": "MSKU5760613",
+    "supplier": "QuartzKraft LLP",
+    "status": "INTRANSIT",
+    "port_eta": "7/1/2026",
+    "location_eta": "7/8/2026",
+    "sipl_status": "D.Os  Received",
+    "Ocean Freight_status": "Complete",
+    "Customs_status": "Missing",
+    "Duty_status": "Missing",
+    "Drayage_status": "Missing",
+    "overall_status": "Missing",
+    "missing_categories": "Customs, Duty, Drayage",
+    "pending_categories": ""
+  },
+  {
+    "sipl": "159843B",
+    "container": "MSKU5760613",
+    "supplier": "QuartzKraft LLP",
+    "status": "INTRANSIT",
+    "port_eta": "7/1/2026",
+    "location_eta": "7/8/2026",
+    "sipl_status": "D.Os  Received",
+    "Ocean Freight_status": "Complete",
+    "Customs_status": "Missing",
+    "Duty_status": "Missing",
+    "Drayage_status": "Missing",
+    "overall_status": "Missing",
+    "missing_categories": "Customs, Duty, Drayage",
+    "pending_categories": ""
+  },
+  {
+    "sipl": "159843C",
+    "container": "MSKU5760613",
+    "supplier": "QuartzKraft LLP",
+    "status": "INTRANSIT",
+    "port_eta": "7/1/2026",
+    "location_eta": "7/8/2026",
+    "sipl_status": "D.Os  Received",
+    "Ocean Freight_status": "Complete",
+    "Customs_status": "Missing",
+    "Duty_status": "Missing",
+    "Drayage_status": "Missing",
+    "overall_status": "Missing",
+    "missing_categories": "Customs, Duty, Drayage",
+    "pending_categories": ""
+  },
+  {
+    "sipl": "159912",
+    "container": "MRKU7248456",
+    "supplier": "Global Surfaces Limited - Quartz",
+    "status": "INTRANSIT",
+    "port_eta": "7/10/2026",
+    "location_eta": "7/17/2026",
+    "sipl_status": "D.Os  Received",
+    "Ocean Freight_status": "Complete",
+    "Customs_status": "Pending",
+    "Duty_status": "Pending",
+    "Drayage_status": "Pending",
+    "overall_status": "Pending",
+    "missing_categories": "",
+    "pending_categories": "Customs, Duty, Drayage"
+  },
+  {
+    "sipl": "164322",
+    "container": "MRKU8277490",
+    "supplier": "Global Surfaces Limited - Quartz",
+    "status": "INTRANSIT",
+    "port_eta": "7/10/2026",
+    "location_eta": "7/17/2026",
+    "sipl_status": "D.Os  Received",
+    "Ocean Freight_status": "Complete",
+    "Customs_status": "Pending",
+    "Duty_status": "Pending",
+    "Drayage_status": "Pending",
+    "overall_status": "Pending",
+    "missing_categories": "",
+    "pending_categories": "Customs, Duty, Drayage"
+  },
+  {
+    "sipl": "164323",
+    "container": "MRKU7490958",
+    "supplier": "Global Surfaces Limited - Quartz",
+    "status": "INTRANSIT",
+    "port_eta": "7/10/2026",
+    "location_eta": "7/17/2026",
+    "sipl_status": "D.Os  Received",
+    "Ocean Freight_status": "Complete",
+    "Customs_status": "Missing",
+    "Duty_status": "Missing",
+    "Drayage_status": "Missing",
+    "overall_status": "Missing",
+    "missing_categories": "Customs, Duty, Drayage",
+    "pending_categories": ""
+  },
+  {
+    "sipl": "164324",
+    "container": "GLDU5582250",
+    "supplier": "Global Surfaces Limited - Quartz",
+    "status": "INTRANSIT",
+    "port_eta": "7/10/2026",
+    "location_eta": "7/17/2026",
+    "sipl_status": "D.Os  Received",
+    "Ocean Freight_status": "Complete",
+    "Customs_status": "Pending",
+    "Duty_status": "Pending",
+    "Drayage_status": "Pending",
+    "overall_status": "Pending",
+    "missing_categories": "",
+    "pending_categories": "Customs, Duty, Drayage"
+  },
+  {
+    "sipl": "166027C",
+    "container": "MSMU2833403",
+    "supplier": "Stone Pro Di Galeazzi Francesco",
+    "status": "INTRANSIT",
+    "port_eta": "6/5/2026",
+    "location_eta": "6/12/2026",
+    "sipl_status": "SIPL Ready",
+    "Ocean Freight_status": "Complete",
+    "Customs_status": "Pending",
+    "Duty_status": "Pending",
+    "Drayage_status": "Pending",
+    "overall_status": "Pending",
+    "missing_categories": "",
+    "pending_categories": "Customs, Duty, Drayage"
+  },
+  {
+    "sipl": "166027D",
+    "container": "MSMU2833403",
+    "supplier": "Stone Pro Di Galeazzi Francesco",
+    "status": "INTRANSIT",
+    "port_eta": "6/5/2026",
+    "location_eta": "6/12/2026",
+    "sipl_status": "SIPL Ready",
+    "Ocean Freight_status": "Complete",
+    "Customs_status": "Pending",
+    "Duty_status": "Pending",
+    "Drayage_status": "Pending",
+    "overall_status": "Pending",
+    "missing_categories": "",
+    "pending_categories": "Customs, Duty, Drayage"
+  },
+  {
+    "sipl": "166980B",
+    "container": "MSMU3424396",
+    "supplier": "Ruipedra, World of Natural Stone, S.A.",
+    "status": "INTRANSIT",
+    "port_eta": "7/3/2026",
+    "location_eta": "7/10/2026",
+    "sipl_status": "D.Os  Received",
+    "Ocean Freight_status": "Missing",
+    "Customs_status": "Missing",
+    "Duty_status": "Missing",
+    "Drayage_status": "Missing",
+    "overall_status": "Missing",
+    "missing_categories": "Ocean Freight, Customs, Duty, Drayage",
+    "pending_categories": ""
+  },
+  {
+    "sipl": "167521",
+    "container": "MSNU1228696",
+    "supplier": "Ceramiche Marca Corona",
+    "status": "INTRANSIT",
+    "port_eta": "6/18/2026",
+    "location_eta": "7/6/2026",
+    "sipl_status": "At branch",
+    "Ocean Freight_status": "Complete",
+    "Customs_status": "Complete",
+    "Duty_status": "Complete",
+    "Drayage_status": "Complete",
+    "overall_status": "Complete",
+    "missing_categories": "",
+    "pending_categories": ""
+  },
+  {
+    "sipl": "167577C",
+    "container": "MSNU2606430",
+    "supplier": "Ruipedra, World of Natural Stone, S.A.",
+    "status": "INTRANSIT",
+    "port_eta": "7/3/2026",
+    "location_eta": "7/10/2026",
+    "sipl_status": "D.Os  Received",
+    "Ocean Freight_status": "Complete",
+    "Customs_status": "Complete",
+    "Duty_status": "Complete",
+    "Drayage_status": "Pending",
+    "overall_status": "Pending",
+    "missing_categories": "",
+    "pending_categories": "Drayage"
+  },
+  {
+    "sipl": "169063",
+    "container": "MSDU2857097",
+    "supplier": "Ceramiche Marca Corona",
+    "status": "INTRANSIT",
+    "port_eta": "7/6/2026",
+    "location_eta": "7/13/2026",
+    "sipl_status": "On Hold",
+    "Ocean Freight_status": "Missing",
+    "Customs_status": "Missing",
+    "Duty_status": "Missing",
+    "Drayage_status": "Missing",
+    "overall_status": "Missing",
+    "missing_categories": "Ocean Freight, Customs, Duty, Drayage",
+    "pending_categories": ""
+  },
+  {
+    "sipl": "169326",
+    "container": "MSNU7395469",
+    "supplier": "Kronos 2 Ceramiche S.p.A",
+    "status": "INTRANSIT",
+    "port_eta": "7/5/2026",
+    "location_eta": "7/9/2026",
+    "sipl_status": "Scheduled for Delivery",
+    "Ocean Freight_status": "Missing",
+    "Customs_status": "Missing",
+    "Duty_status": "Missing",
+    "Drayage_status": "Missing",
+    "overall_status": "Missing",
+    "missing_categories": "Ocean Freight, Customs, Duty, Drayage",
+    "pending_categories": ""
+  },
+  {
+    "sipl": "169571",
+    "container": "MSDU1440513",
+    "supplier": "GRESPANIA SA",
+    "status": "INTRANSIT",
+    "port_eta": "7/9/2026",
+    "location_eta": "7/10/2026",
+    "sipl_status": "Scheduled for Delivery",
+    "Ocean Freight_status": "Pending",
+    "Customs_status": "Pending",
+    "Duty_status": "Pending",
+    "Drayage_status": "Pending",
+    "overall_status": "Pending",
+    "missing_categories": "",
+    "pending_categories": "Ocean Freight, Customs, Duty, Drayage"
+  },
+  {
+    "sipl": "169611B",
+    "container": "MSNU7395469",
+    "supplier": "Emilceramica S.r.l (dba Emilgroup)",
+    "status": "INTRANSIT",
+    "port_eta": "7/5/2026",
+    "location_eta": "7/9/2026",
+    "sipl_status": "Scheduled for Delivery",
+    "Ocean Freight_status": "Missing",
+    "Customs_status": "Missing",
+    "Duty_status": "Missing",
+    "Drayage_status": "Missing",
+    "overall_status": "Missing",
+    "missing_categories": "Ocean Freight, Customs, Duty, Drayage",
+    "pending_categories": ""
+  },
+  {
+    "sipl": "169616B",
+    "container": "MSNU7395469",
+    "supplier": "Kronos 2 Ceramiche S.p.A",
+    "status": "INTRANSIT",
+    "port_eta": "7/5/2026",
+    "location_eta": "7/9/2026",
+    "sipl_status": "Scheduled for Delivery",
+    "Ocean Freight_status": "Missing",
+    "Customs_status": "Missing",
+    "Duty_status": "Missing",
+    "Drayage_status": "Missing",
+    "overall_status": "Missing",
+    "missing_categories": "Ocean Freight, Customs, Duty, Drayage",
+    "pending_categories": ""
+  },
+  {
+    "sipl": "169617",
+    "container": "MSNU7395469",
+    "supplier": "COEM /FIORENESE",
+    "status": "INTRANSIT",
+    "port_eta": "7/5/2026",
+    "location_eta": "7/9/2026",
+    "sipl_status": "Scheduled for Delivery",
+    "Ocean Freight_status": "Missing",
+    "Customs_status": "Missing",
+    "Duty_status": "Missing",
+    "Drayage_status": "Missing",
+    "overall_status": "Missing",
+    "missing_categories": "Ocean Freight, Customs, Duty, Drayage",
+    "pending_categories": ""
+  },
+  {
+    "sipl": "169657B",
+    "container": "MSDU7956662",
+    "supplier": "StonePeak Ceramics, Inc",
+    "status": "INTRANSIT",
+    "port_eta": "6/22/2026",
+    "location_eta": "6/26/2026",
+    "sipl_status": "At branch",
+    "Ocean Freight_status": "Missing",
+    "Customs_status": "Missing",
+    "Duty_status": "Missing",
+    "Drayage_status": "Missing",
+    "overall_status": "Missing",
+    "missing_categories": "Ocean Freight, Customs, Duty, Drayage",
+    "pending_categories": ""
+  },
+  {
+    "sipl": "169961",
+    "container": "CAIU6195977",
+    "supplier": "Compacstone USA, Inc",
+    "status": "INTRANSIT",
+    "port_eta": "7/12/2026",
+    "location_eta": "7/19/2026",
+    "sipl_status": "Documents Sent",
+    "Ocean Freight_status": "Missing",
+    "Customs_status": "Missing",
+    "Duty_status": "Missing",
+    "Drayage_status": "Missing",
+    "overall_status": "Missing",
+    "missing_categories": "Ocean Freight, Customs, Duty, Drayage",
+    "pending_categories": ""
+  },
+  {
+    "sipl": "169976",
+    "container": "FCIU4308603",
+    "supplier": "Ecoceramic Ceramica",
+    "status": "INTRANSIT",
+    "port_eta": "7/4/2026",
+    "location_eta": "7/11/2026",
+    "sipl_status": "D.Os  Received",
+    "Ocean Freight_status": "Missing",
+    "Customs_status": "Missing",
+    "Duty_status": "Missing",
+    "Drayage_status": "Missing",
+    "overall_status": "Missing",
+    "missing_categories": "Ocean Freight, Customs, Duty, Drayage",
+    "pending_categories": ""
+  },
+  {
+    "sipl": "170016",
+    "container": "FTAU1244280",
+    "supplier": "Thor Bahia Granitos LTDA - EPP",
+    "status": "INTRANSIT",
+    "port_eta": "7/6/2026",
+    "location_eta": "7/13/2026",
+    "sipl_status": "D.Os  Received",
+    "Ocean Freight_status": "Complete",
+    "Customs_status": "Complete",
+    "Duty_status": "Complete",
+    "Drayage_status": "Pending",
+    "overall_status": "Pending",
+    "missing_categories": "",
+    "pending_categories": "Drayage"
+  },
+  {
+    "sipl": "170081",
+    "container": "MSMU1753221",
+    "supplier": "Decolores Marmores E Granitos Do Brasil Ltda",
+    "status": "INTRANSIT",
+    "port_eta": "7/6/2026",
+    "location_eta": "7/13/2026",
+    "sipl_status": "On Hold",
+    "Ocean Freight_status": "Missing",
+    "Customs_status": "Missing",
+    "Duty_status": "Missing",
+    "Drayage_status": "Missing",
+    "overall_status": "Missing",
+    "missing_categories": "Ocean Freight, Customs, Duty, Drayage",
+    "pending_categories": ""
+  },
+  {
+    "sipl": "170089",
+    "container": "MEDU3110874",
+    "supplier": "Gmp-Graniti Marmi Pietre S.P.A.",
+    "status": "INTRANSIT",
+    "port_eta": "7/6/2026",
+    "location_eta": "7/13/2026",
+    "sipl_status": "D.Os  Received",
+    "Ocean Freight_status": "Complete",
+    "Customs_status": "Complete",
+    "Duty_status": "Missing",
+    "Drayage_status": "Missing",
+    "overall_status": "Missing",
+    "missing_categories": "Duty, Drayage",
+    "pending_categories": ""
+  },
+  {
+    "sipl": "170107",
+    "container": "MSMU1753221",
+    "supplier": "Decolores Marmores E Granitos Do Brasil Ltda",
+    "status": "INTRANSIT",
+    "port_eta": "7/6/2026",
+    "location_eta": "7/13/2026",
+    "sipl_status": "On Hold",
+    "Ocean Freight_status": "Missing",
+    "Customs_status": "Missing",
+    "Duty_status": "Missing",
+    "Drayage_status": "Missing",
+    "overall_status": "Missing",
+    "missing_categories": "Ocean Freight, Customs, Duty, Drayage",
+    "pending_categories": ""
+  },
+  {
+    "sipl": "170135",
+    "container": "MSMU3540210",
+    "supplier": "INFINITY ENGINEERED SURFACE",
+    "status": "INTRANSIT",
+    "port_eta": "7/9/2026",
+    "location_eta": "7/16/2026",
+    "sipl_status": "D.Os  Received",
+    "Ocean Freight_status": "Missing",
+    "Customs_status": "Missing",
+    "Duty_status": "Missing",
+    "Drayage_status": "Missing",
+    "overall_status": "Missing",
+    "missing_categories": "Ocean Freight, Customs, Duty, Drayage",
+    "pending_categories": ""
+  },
+  {
+    "sipl": "170142",
+    "container": "MSDU7956662",
+    "supplier": "41zero42 srl",
+    "status": "INTRANSIT",
+    "port_eta": "6/22/2026",
+    "location_eta": "6/26/2026",
+    "sipl_status": "At branch",
+    "Ocean Freight_status": "Missing",
+    "Customs_status": "Missing",
+    "Duty_status": "Missing",
+    "Drayage_status": "Missing",
+    "overall_status": "Missing",
+    "missing_categories": "Ocean Freight, Customs, Duty, Drayage",
+    "pending_categories": ""
+  },
+  {
+    "sipl": "170191",
+    "container": "MSNU1343956",
+    "supplier": "Black Eagle Surfaces SRL",
+    "status": "INTRANSIT",
+    "port_eta": "7/6/2026",
+    "location_eta": "7/13/2026",
+    "sipl_status": "D.Os  Received",
+    "Ocean Freight_status": "Complete",
+    "Customs_status": "Pending",
+    "Duty_status": "Pending",
+    "Drayage_status": "Pending",
+    "overall_status": "Pending",
+    "missing_categories": "",
+    "pending_categories": "Customs, Duty, Drayage"
+  },
+  {
+    "sipl": "170211",
+    "container": "MSNU7395469",
+    "supplier": "Florim Ceramiche Spa SB",
+    "status": "INTRANSIT",
+    "port_eta": "7/5/2026",
+    "location_eta": "7/9/2026",
+    "sipl_status": "Scheduled for Delivery",
+    "Ocean Freight_status": "Missing",
+    "Customs_status": "Missing",
+    "Duty_status": "Missing",
+    "Drayage_status": "Missing",
+    "overall_status": "Missing",
+    "missing_categories": "Ocean Freight, Customs, Duty, Drayage",
+    "pending_categories": ""
+  },
+  {
+    "sipl": "170278",
+    "container": "MSNU3140602",
+    "supplier": "Fincibec S.p.a.",
+    "status": "INTRANSIT",
+    "port_eta": "7/6/2026",
+    "location_eta": "7/13/2026",
+    "sipl_status": "D.Os  Received",
+    "Ocean Freight_status": "Missing",
+    "Customs_status": "Missing",
+    "Duty_status": "Missing",
+    "Drayage_status": "Missing",
+    "overall_status": "Missing",
+    "missing_categories": "Ocean Freight, Customs, Duty, Drayage",
+    "pending_categories": ""
+  },
+  {
+    "sipl": "170281B",
+    "container": "TLLU3415434",
+    "supplier": "Natural Stones S.R.L.",
+    "status": "INTRANSIT",
+    "port_eta": "7/6/2026",
+    "location_eta": "7/13/2026",
+    "sipl_status": "SIPL Ready",
+    "Ocean Freight_status": "Complete",
+    "Customs_status": "Complete",
+    "Duty_status": "Complete",
+    "Drayage_status": "Pending",
+    "overall_status": "Pending",
+    "missing_categories": "",
+    "pending_categories": "Drayage"
+  },
+  {
+    "sipl": "170325",
+    "container": "MSDU7956662",
+    "supplier": "Kronos 2 Ceramiche S.p.A",
+    "status": "INTRANSIT",
+    "port_eta": "6/22/2026",
+    "location_eta": "6/26/2026",
+    "sipl_status": "At branch",
+    "Ocean Freight_status": "Missing",
+    "Customs_status": "Missing",
+    "Duty_status": "Missing",
+    "Drayage_status": "Missing",
+    "overall_status": "Missing",
+    "missing_categories": "Ocean Freight, Customs, Duty, Drayage",
+    "pending_categories": ""
+  },
+  {
+    "sipl": "170371",
+    "container": "TLLU3415434",
+    "supplier": "Natural Stones S.R.L.",
+    "status": "INTRANSIT",
+    "port_eta": "7/6/2026",
+    "location_eta": "7/13/2026",
+    "sipl_status": "SIPL Ready",
+    "Ocean Freight_status": "Complete",
+    "Customs_status": "Complete",
+    "Duty_status": "Complete",
+    "Drayage_status": "Pending",
+    "overall_status": "Pending",
+    "missing_categories": "",
+    "pending_categories": "Drayage"
+  },
+  {
+    "sipl": "170394",
+    "container": "MSDU7956662",
+    "supplier": "COEM /FIORENESE",
+    "status": "INTRANSIT",
+    "port_eta": "6/22/2026",
+    "location_eta": "6/26/2026",
+    "sipl_status": "At branch",
+    "Ocean Freight_status": "Missing",
+    "Customs_status": "Missing",
+    "Duty_status": "Missing",
+    "Drayage_status": "Missing",
+    "overall_status": "Missing",
+    "missing_categories": "Ocean Freight, Customs, Duty, Drayage",
+    "pending_categories": ""
+  },
+  {
+    "sipl": "170394B",
+    "container": "MSDU7956662",
+    "supplier": "COEM /FIORENESE",
+    "status": "INTRANSIT",
+    "port_eta": "6/22/2026",
+    "location_eta": "6/26/2026",
+    "sipl_status": "At branch",
+    "Ocean Freight_status": "Missing",
+    "Customs_status": "Missing",
+    "Duty_status": "Missing",
+    "Drayage_status": "Missing",
+    "overall_status": "Missing",
+    "missing_categories": "Ocean Freight, Customs, Duty, Drayage",
+    "pending_categories": ""
+  },
+  {
+    "sipl": "170395",
+    "container": "MSDU7956662",
+    "supplier": "Kronos 2 Ceramiche S.p.A",
+    "status": "INTRANSIT",
+    "port_eta": "6/22/2026",
+    "location_eta": "6/26/2026",
+    "sipl_status": "At branch",
+    "Ocean Freight_status": "Missing",
+    "Customs_status": "Missing",
+    "Duty_status": "Missing",
+    "Drayage_status": "Missing",
+    "overall_status": "Missing",
+    "missing_categories": "Ocean Freight, Customs, Duty, Drayage",
+    "pending_categories": ""
+  },
+  {
+    "sipl": "170395B",
+    "container": "MSDU8402053",
+    "supplier": "Kronos 2 Ceramiche S.p.A",
+    "status": "INTRANSIT",
+    "port_eta": "6/22/2026",
+    "location_eta": "6/26/2026",
+    "sipl_status": "SIPL Ready",
+    "Ocean Freight_status": "Missing",
+    "Customs_status": "Missing",
+    "Duty_status": "Missing",
+    "Drayage_status": "Missing",
+    "overall_status": "Missing",
+    "missing_categories": "Ocean Freight, Customs, Duty, Drayage",
+    "pending_categories": ""
+  },
+  {
+    "sipl": "170396",
+    "container": "MSDU7956662",
+    "supplier": "Tuscania S.P.A",
+    "status": "INTRANSIT",
+    "port_eta": "6/22/2026",
+    "location_eta": "6/26/2026",
+    "sipl_status": "At branch",
+    "Ocean Freight_status": "Missing",
+    "Customs_status": "Missing",
+    "Duty_status": "Missing",
+    "Drayage_status": "Missing",
+    "overall_status": "Missing",
+    "missing_categories": "Ocean Freight, Customs, Duty, Drayage",
+    "pending_categories": ""
+  },
+  {
+    "sipl": "170491",
+    "container": "MEDU6282162",
+    "supplier": "Decolores Marmores E Granitos Do Brasil Ltda",
+    "status": "INTRANSIT",
+    "port_eta": "7/8/2026",
+    "location_eta": "7/15/2026",
+    "sipl_status": "D.Os  Received",
+    "Ocean Freight_status": "Missing",
+    "Customs_status": "Missing",
+    "Duty_status": "Missing",
+    "Drayage_status": "Missing",
+    "overall_status": "Missing",
+    "missing_categories": "Ocean Freight, Customs, Duty, Drayage",
+    "pending_categories": ""
+  },
+  {
+    "sipl": "170525",
+    "container": "MSDU7956662",
+    "supplier": "Kronos 2 Ceramiche S.p.A",
+    "status": "INTRANSIT",
+    "port_eta": "6/22/2026",
+    "location_eta": "6/29/2026",
+    "sipl_status": "At branch",
+    "Ocean Freight_status": "Missing",
+    "Customs_status": "Missing",
+    "Duty_status": "Missing",
+    "Drayage_status": "Missing",
+    "overall_status": "Missing",
+    "missing_categories": "Ocean Freight, Customs, Duty, Drayage",
+    "pending_categories": ""
+  },
+  {
+    "sipl": "170526",
+    "container": "MSDU7956662",
+    "supplier": "StonePeak Ceramics, Inc",
+    "status": "INTRANSIT",
+    "port_eta": "6/22/2026",
+    "location_eta": "6/26/2026",
+    "sipl_status": "At branch",
+    "Ocean Freight_status": "Missing",
+    "Customs_status": "Missing",
+    "Duty_status": "Missing",
+    "Drayage_status": "Missing",
+    "overall_status": "Missing",
+    "missing_categories": "Ocean Freight, Customs, Duty, Drayage",
+    "pending_categories": ""
+  },
+  {
+    "sipl": "170559",
+    "container": "MSMU1234761",
+    "supplier": "Brasigran Brasileira de Granitos Ltda",
+    "status": "INTRANSIT",
+    "port_eta": "7/6/2026",
+    "location_eta": "7/13/2026",
+    "sipl_status": "D.Os  Received",
+    "Ocean Freight_status": "Complete",
+    "Customs_status": "Complete",
+    "Duty_status": "Complete",
+    "Drayage_status": "Pending",
+    "overall_status": "Pending",
+    "missing_categories": "",
+    "pending_categories": "Drayage"
+  },
+  {
+    "sipl": "170560",
+    "container": "MSMU3159564",
+    "supplier": "Cosmos Stones Dogal Tas Ic Ve Dis Ticaret Limited Sirketi",
+    "status": "INTRANSIT",
+    "port_eta": "7/2/2026",
+    "location_eta": "7/7/2026",
+    "sipl_status": "At branch",
+    "Ocean Freight_status": "Complete",
+    "Customs_status": "Complete",
+    "Duty_status": "Complete",
+    "Drayage_status": "Complete",
+    "overall_status": "Complete",
+    "missing_categories": "",
+    "pending_categories": ""
+  },
+  {
+    "sipl": "170568",
+    "container": "MSNU7395469",
+    "supplier": "Florim Ceramiche Spa SB",
+    "status": "INTRANSIT",
+    "port_eta": "7/5/2026",
+    "location_eta": "7/9/2026",
+    "sipl_status": "Scheduled for Delivery",
+    "Ocean Freight_status": "Missing",
+    "Customs_status": "Missing",
+    "Duty_status": "Missing",
+    "Drayage_status": "Missing",
+    "overall_status": "Missing",
+    "missing_categories": "Ocean Freight, Customs, Duty, Drayage",
+    "pending_categories": ""
+  },
+  {
+    "sipl": "170621",
+    "container": "MSNU7395469",
+    "supplier": "Florim Ceramiche Spa SB",
+    "status": "INTRANSIT",
+    "port_eta": "7/5/2026",
+    "location_eta": "7/9/2026",
+    "sipl_status": "Scheduled for Delivery",
+    "Ocean Freight_status": "Missing",
+    "Customs_status": "Missing",
+    "Duty_status": "Missing",
+    "Drayage_status": "Missing",
+    "overall_status": "Missing",
+    "missing_categories": "Ocean Freight, Customs, Duty, Drayage",
+    "pending_categories": ""
+  },
+  {
+    "sipl": "170671",
+    "container": "MEDU3110874",
+    "supplier": "Marmoles Man Srl",
+    "status": "INTRANSIT",
+    "port_eta": "7/6/2026",
+    "location_eta": "7/13/2026",
+    "sipl_status": "D.Os  Received",
+    "Ocean Freight_status": "Complete",
+    "Customs_status": "Complete",
+    "Duty_status": "Missing",
+    "Drayage_status": "Missing",
+    "overall_status": "Missing",
+    "missing_categories": "Duty, Drayage",
+    "pending_categories": ""
+  },
+  {
+    "sipl": "170686",
+    "container": "MSNU7395469",
+    "supplier": "Kronos 2 Ceramiche S.p.A",
+    "status": "INTRANSIT",
+    "port_eta": "7/5/2026",
+    "location_eta": "7/9/2026",
+    "sipl_status": "Scheduled for Delivery",
+    "Ocean Freight_status": "Missing",
+    "Customs_status": "Missing",
+    "Duty_status": "Missing",
+    "Drayage_status": "Missing",
+    "overall_status": "Missing",
+    "missing_categories": "Ocean Freight, Customs, Duty, Drayage",
+    "pending_categories": ""
+  },
+  {
+    "sipl": "170690",
+    "container": "MSNU3849619",
+    "supplier": "Max Marmi Carrara s.r.l",
+    "status": "INTRANSIT",
+    "port_eta": "7/6/2026",
+    "location_eta": "7/13/2026",
+    "sipl_status": "D.Os  Received",
+    "Ocean Freight_status": "Complete",
+    "Customs_status": "Complete",
+    "Duty_status": "Pending",
+    "Drayage_status": "Pending",
+    "overall_status": "Pending",
+    "missing_categories": "",
+    "pending_categories": "Duty, Drayage"
+  },
+  {
+    "sipl": "170692",
+    "container": "MSNU3849619",
+    "supplier": "Tre Emme Import Export S.R.L",
+    "status": "INTRANSIT",
+    "port_eta": "7/6/2026",
+    "location_eta": "7/13/2026",
+    "sipl_status": "D.Os  Received",
+    "Ocean Freight_status": "Complete",
+    "Customs_status": "Complete",
+    "Duty_status": "Pending",
+    "Drayage_status": "Pending",
+    "overall_status": "Pending",
+    "missing_categories": "",
+    "pending_categories": "Duty, Drayage"
+  },
+  {
+    "sipl": "170696",
+    "container": "HPCU2621975",
+    "supplier": "Thor Bahia Granitos LTDA - EPP",
+    "status": "INTRANSIT",
+    "port_eta": "7/12/2026",
+    "location_eta": "7/19/2026",
+    "sipl_status": "Documents Sent",
+    "Ocean Freight_status": "Missing",
+    "Customs_status": "Missing",
+    "Duty_status": "Missing",
+    "Drayage_status": "Missing",
+    "overall_status": "Missing",
+    "missing_categories": "Ocean Freight, Customs, Duty, Drayage",
+    "pending_categories": ""
+  },
+  {
+    "sipl": "170699",
+    "container": "MEDU6558203",
+    "supplier": "Thor Bahia Granitos LTDA - EPP",
+    "status": "INTRANSIT",
+    "port_eta": "7/8/2026",
+    "location_eta": "7/15/2026",
+    "sipl_status": "Documents Sent",
+    "Ocean Freight_status": "Missing",
+    "Customs_status": "Missing",
+    "Duty_status": "Missing",
+    "Drayage_status": "Missing",
+    "overall_status": "Missing",
+    "missing_categories": "Ocean Freight, Customs, Duty, Drayage",
+    "pending_categories": ""
+  },
+  {
+    "sipl": "170709",
+    "container": "FCIU2969902",
+    "supplier": "Granito Zucchi LTDA",
+    "status": "INTRANSIT",
+    "port_eta": "7/9/2026",
+    "location_eta": "7/16/2026",
+    "sipl_status": "Documents Sent",
+    "Ocean Freight_status": "Missing",
+    "Customs_status": "Missing",
+    "Duty_status": "Missing",
+    "Drayage_status": "Missing",
+    "overall_status": "Missing",
+    "missing_categories": "Ocean Freight, Customs, Duty, Drayage",
+    "pending_categories": ""
+  },
+  {
+    "sipl": "170831",
+    "container": "MSNU7395469",
+    "supplier": "Florim Ceramiche Spa SB",
+    "status": "INTRANSIT",
+    "port_eta": "7/5/2026",
+    "location_eta": "7/9/2026",
+    "sipl_status": "Scheduled for Delivery",
+    "Ocean Freight_status": "Missing",
+    "Customs_status": "Missing",
+    "Duty_status": "Missing",
+    "Drayage_status": "Missing",
+    "overall_status": "Missing",
+    "missing_categories": "Ocean Freight, Customs, Duty, Drayage",
+    "pending_categories": ""
+  },
+  {
+    "sipl": "170940",
+    "container": "MSDU2926198",
+    "supplier": "Qualita Granitos E Marmores Ltda",
+    "status": "INTRANSIT",
+    "port_eta": "6/25/2026",
+    "location_eta": "6/26/2026",
+    "sipl_status": "Damaged",
+    "Ocean Freight_status": "Complete",
+    "Customs_status": "Complete",
+    "Duty_status": "Complete",
+    "Drayage_status": "Pending",
+    "overall_status": "Pending",
+    "missing_categories": "",
+    "pending_categories": "Drayage"
+  },
+  {
+    "sipl": "170946",
+    "container": "MEDU6027974",
+    "supplier": "Mineral Stone Exportacao Ltda",
+    "status": "INTRANSIT",
+    "port_eta": "7/6/2026",
+    "location_eta": "7/13/2026",
+    "sipl_status": "Freight Invoice Needed",
+    "Ocean Freight_status": "Complete",
+    "Customs_status": "Complete",
+    "Duty_status": "Complete",
+    "Drayage_status": "Pending",
+    "overall_status": "Pending",
+    "missing_categories": "",
+    "pending_categories": "Drayage"
+  },
+  {
+    "sipl": "170979",
+    "container": "MSMU1056280",
+    "supplier": "Bonotti",
+    "status": "INTRANSIT",
+    "port_eta": "7/12/2026",
+    "location_eta": "7/19/2026",
+    "sipl_status": "SIPL Ready",
+    "Ocean Freight_status": "Complete",
+    "Customs_status": "Complete",
+    "Duty_status": "Pending",
+    "Drayage_status": "Pending",
+    "overall_status": "Pending",
+    "missing_categories": "",
+    "pending_categories": "Duty, Drayage"
+  },
+  {
+    "sipl": "170979B",
+    "container": "XHCU2466631",
+    "supplier": "Bonotti",
+    "status": "INTRANSIT",
+    "port_eta": "7/9/2026",
+    "location_eta": "7/16/2026",
+    "sipl_status": "SIPL Ready",
+    "Ocean Freight_status": "Complete",
+    "Customs_status": "Pending",
+    "Duty_status": "Pending",
+    "Drayage_status": "Pending",
+    "overall_status": "Pending",
+    "missing_categories": "",
+    "pending_categories": "Customs, Duty, Drayage"
+  },
+  {
+    "sipl": "170982",
+    "container": "TGBU1100078",
+    "supplier": "Viemme Marmi Srl",
+    "status": "INTRANSIT",
+    "port_eta": "7/9/2026",
+    "location_eta": "7/16/2026",
+    "sipl_status": "SIPL Ready",
+    "Ocean Freight_status": "Complete",
+    "Customs_status": "Missing",
+    "Duty_status": "Missing",
+    "Drayage_status": "Missing",
+    "overall_status": "Missing",
+    "missing_categories": "Customs, Duty, Drayage",
+    "pending_categories": ""
+  },
+  {
+    "sipl": "170995",
+    "container": "MEDU3110874",
+    "supplier": "IL Fiorino Marmi SRL",
+    "status": "INTRANSIT",
+    "port_eta": "7/6/2026",
+    "location_eta": "7/13/2026",
+    "sipl_status": "D.Os  Received",
+    "Ocean Freight_status": "Complete",
+    "Customs_status": "Complete",
+    "Duty_status": "Missing",
+    "Drayage_status": "Missing",
+    "overall_status": "Missing",
+    "missing_categories": "Duty, Drayage",
+    "pending_categories": ""
+  },
+  {
+    "sipl": "171007",
+    "container": "MSBU2891725",
+    "supplier": "ANTOLINI LUIGI & C. S.P.A.",
+    "status": "INTRANSIT",
+    "port_eta": "7/7/2026",
+    "location_eta": "7/14/2026",
+    "sipl_status": "SIPL Ready",
+    "Ocean Freight_status": "Complete",
+    "Customs_status": "Missing",
+    "Duty_status": "Missing",
+    "Drayage_status": "Missing",
+    "overall_status": "Missing",
+    "missing_categories": "Customs, Duty, Drayage",
+    "pending_categories": ""
+  },
+  {
+    "sipl": "171115",
+    "container": "DFSU2940081",
+    "supplier": "Bramagran",
+    "status": "INTRANSIT",
+    "port_eta": "7/8/2026",
+    "location_eta": "7/15/2026",
+    "sipl_status": "Documents Sent",
+    "Ocean Freight_status": "Missing",
+    "Customs_status": "Missing",
+    "Duty_status": "Missing",
+    "Drayage_status": "Missing",
+    "overall_status": "Missing",
+    "missing_categories": "Ocean Freight, Customs, Duty, Drayage",
+    "pending_categories": ""
+  },
+  {
+    "sipl": "171118",
+    "container": "MSNU7395469",
+    "supplier": "Florim Ceramiche Spa SB",
+    "status": "INTRANSIT",
+    "port_eta": "7/5/2026",
+    "location_eta": "7/9/2026",
+    "sipl_status": "Scheduled for Delivery",
+    "Ocean Freight_status": "Missing",
+    "Customs_status": "Missing",
+    "Duty_status": "Missing",
+    "Drayage_status": "Missing",
+    "overall_status": "Missing",
+    "missing_categories": "Ocean Freight, Customs, Duty, Drayage",
+    "pending_categories": ""
+  },
+  {
+    "sipl": "171174",
+    "container": "SEGU3671280",
+    "supplier": "NIKOLAUS BAGNARA SPA - AG",
+    "status": "INTRANSIT",
+    "port_eta": "7/9/2026",
+    "location_eta": "7/16/2026",
+    "sipl_status": "SIPL Ready",
+    "Ocean Freight_status": "Complete",
+    "Customs_status": "Pending",
+    "Duty_status": "Pending",
+    "Drayage_status": "Pending",
+    "overall_status": "Pending",
+    "missing_categories": "",
+    "pending_categories": "Customs, Duty, Drayage"
+  },
+  {
+    "sipl": "171204",
+    "container": "MSMU1207869",
+    "supplier": "Brasigran Brasileira de Granitos Ltda",
+    "status": "INTRANSIT",
+    "port_eta": "7/12/2026",
+    "location_eta": "7/19/2026",
+    "sipl_status": "Documents Sent",
+    "Ocean Freight_status": "Missing",
+    "Customs_status": "Missing",
+    "Duty_status": "Missing",
+    "Drayage_status": "Missing",
+    "overall_status": "Missing",
+    "missing_categories": "Ocean Freight, Customs, Duty, Drayage",
+    "pending_categories": ""
+  },
+  {
+    "sipl": "171210",
+    "container": "TRHU1979741",
+    "supplier": "Qualita Granitos E Marmores Ltda",
+    "status": "INTRANSIT",
+    "port_eta": "7/8/2026",
+    "location_eta": "7/15/2026",
+    "sipl_status": "Documents Sent",
+    "Ocean Freight_status": "Missing",
+    "Customs_status": "Missing",
+    "Duty_status": "Missing",
+    "Drayage_status": "Missing",
+    "overall_status": "Missing",
+    "missing_categories": "Ocean Freight, Customs, Duty, Drayage",
+    "pending_categories": ""
+  },
+  {
+    "sipl": "171238",
+    "container": "MSMU2089056",
+    "supplier": "Gramil Granitos E Marmores Itapemirim LTDA",
+    "status": "INTRANSIT",
+    "port_eta": "7/8/2026",
+    "location_eta": "7/15/2026",
+    "sipl_status": "Documents Sent",
+    "Ocean Freight_status": "Missing",
+    "Customs_status": "Missing",
+    "Duty_status": "Missing",
+    "Drayage_status": "Missing",
+    "overall_status": "Missing",
+    "missing_categories": "Ocean Freight, Customs, Duty, Drayage",
+    "pending_categories": ""
+  },
+  {
+    "sipl": "171359",
+    "container": "MSNU7395469",
+    "supplier": "Emilceramica S.r.l (dba Emilgroup)",
+    "status": "INTRANSIT",
+    "port_eta": "7/5/2026",
+    "location_eta": "7/9/2026",
+    "sipl_status": "Scheduled for Delivery",
+    "Ocean Freight_status": "Missing",
+    "Customs_status": "Missing",
+    "Duty_status": "Missing",
+    "Drayage_status": "Missing",
+    "overall_status": "Missing",
+    "missing_categories": "Ocean Freight, Customs, Duty, Drayage",
+    "pending_categories": ""
+  },
+  {
+    "sipl": "171364",
+    "container": "TGCU0143090",
+    "supplier": "Qualita Granitos E Marmores Ltda",
+    "status": "INTRANSIT",
+    "port_eta": "7/12/2026",
+    "location_eta": "7/19/2026",
+    "sipl_status": "Documents Sent",
+    "Ocean Freight_status": "Missing",
+    "Customs_status": "Missing",
+    "Duty_status": "Missing",
+    "Drayage_status": "Missing",
+    "overall_status": "Missing",
+    "missing_categories": "Ocean Freight, Customs, Duty, Drayage",
+    "pending_categories": ""
+  },
+  {
+    "sipl": "171365",
+    "container": "TCKU3393258",
+    "supplier": "Mineral Stone Exportacao Ltda",
+    "status": "INTRANSIT",
+    "port_eta": "7/12/2026",
+    "location_eta": "7/19/2026",
+    "sipl_status": "Documents Sent",
+    "Ocean Freight_status": "Missing",
+    "Customs_status": "Missing",
+    "Duty_status": "Missing",
+    "Drayage_status": "Missing",
+    "overall_status": "Missing",
+    "missing_categories": "Ocean Freight, Customs, Duty, Drayage",
+    "pending_categories": ""
+  },
+  {
+    "sipl": "171396",
+    "container": "MSMU2397315",
+    "supplier": "Decolores Marmores E Granitos Do Brasil Ltda",
+    "status": "INTRANSIT",
+    "port_eta": "7/12/2026",
+    "location_eta": "7/19/2026",
+    "sipl_status": "Documents Sent",
+    "Ocean Freight_status": "Missing",
+    "Customs_status": "Missing",
+    "Duty_status": "Missing",
+    "Drayage_status": "Missing",
+    "overall_status": "Missing",
+    "missing_categories": "Ocean Freight, Customs, Duty, Drayage",
+    "pending_categories": ""
+  }
+];
+
+    function populateTable(filteredData) {
+        const tbody = document.getElementById('tableBody');
+        tbody.innerHTML = '';
+
+        if (filteredData.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="11" class="no-results">No results found</td></tr>';
+            return;
+        }
+
+        filteredData.forEach(row => {
+            const tr = document.createElement('tr');
+            tr.className = 'row-' + row.overall_status.toLowerCase();
+            tr.dataset.status = row.overall_status.toLowerCase();
+
+            tr.innerHTML = `
+                <td><strong>${row.sipl}</strong></td>
+                <td>${row.container}</td>
+                <td class="supplier">${row.supplier}</td>
+                <td class="eta">${row.port_eta}</td>
+                <td><span class="status-badge status-${row.overall_status.toLowerCase()}">${row.overall_status}</span></td>
+                <td><span class="status-badge status-${row['Ocean Freight_status'].toLowerCase()}">${row['Ocean Freight_status']}</span></td>
+                <td><span class="status-badge status-${row['Customs_status'].toLowerCase()}">${row['Customs_status']}</span></td>
+                <td><span class="status-badge status-${row['Duty_status'].toLowerCase()}">${row['Duty_status']}</span></td>
+                <td><span class="status-badge status-${row['Drayage_status'].toLowerCase()}">${row['Drayage_status']}</span></td>
+                <td class="categories">${row.missing_categories || '—'}</td>
+                <td class="categories">${row.pending_categories || '—'}</td>
+            `;
+            tbody.appendChild(tr);
+        });
+    }
+
+    function filterTable(status) {
+        // Update active button
+        document.querySelectorAll('.filter-btn').forEach(btn => btn.classList.remove('active'));
+        event.target.classList.add('active');
+
+        // Filter data
+        if (status === 'all') {
+            populateTable(data);
+        } else {
+            const filtered = data.filter(row => row.overall_status.toLowerCase() === status);
+            populateTable(filtered);
+        }
+    }
+
+    // Initial population
+    populateTable(data);
+</script>
+
+</body>
+</html>

@@ -1,12 +1,16 @@
 
-
 import streamlit as st
 import pandas as pd
+import altair as alt
 
+# =============================================================================
+# PAGE CONFIG (MUST BE FIRST STREAMLIT COMMAND)
+# =============================================================================
 st.set_page_config(
     page_title="Logistics Control Tower",
     layout="wide"
 )
+
 from logic_cloud import (
     load_bookings,
     build_execution_master,
@@ -23,52 +27,100 @@ from logic_cloud import (
     get_rollover_summary,
     get_container_data_issues,
     get_lfd_risk,
+    get_arriving_invoice_risk,
+    get_operational_invoice_dashboard,
 )
 
-
-
+# =============================================================================
+# FILE UPLOAD & DATA LOADING (BEFORE ANY TABS)
+# =============================================================================
 uploaded_file = st.sidebar.file_uploader(
     "Upload dashboard_data.xlsx",
     type=["xlsx"]
 )
 
 if uploaded_file is None:
-    st.info("Please upload dashboard_data.xlsx")
+    st.info("📁 Please upload dashboard_data.xlsx to get started")
     st.stop()
 
 xls = pd.ExcelFile(uploaded_file)
 
-bookings_raw = pd.read_excel(xls, "bookings")
+# Load all sheets
+bookings_raw         = pd.read_excel(xls, "bookings")
 shipment_mapping_raw = pd.read_excel(xls, "shipment_mapping")
-open_po_raw = pd.read_excel(xls, "open_po")
-in_transit_raw = pd.read_excel(xls, "in_transit")
-inventory_raw = pd.read_excel(xls, "inventory_intransit")
-bookings = load_bookings(
-    bookings_raw,
-    shipment_mapping_raw
+open_po_raw          = pd.read_excel(xls, "open_po")
+in_transit_raw       = pd.read_excel(xls, "in_transit")
+inventory_raw        = pd.read_excel(xls, "inventory_intransit")
+
+# NEW: Load invoice compliance (per redesign)
+invoice_compliance_raw = (
+    pd.read_excel(xls, "invoice_compliance")
+    if "invoice_compliance" in xls.sheet_names
+    else pd.DataFrame()
 )
-tab1, tab2 = st.tabs(["📦 Booking", "🚢 Container Movement"])
 
+# Optional: Show available sheets for debugging
+# st.sidebar.caption(f"Sheets available: {', '.join(xls.sheet_names)}")
+
+bookings = load_bookings(bookings_raw, shipment_mapping_raw)
+
+# =============================================================================
+# TAB INITIALIZATION (CRITICAL: Must be after data loading, before sidebar state)
+# This fix prevents tabs from losing state on refresh
+# =============================================================================
+tab1, tab2, tab3 = st.tabs(["📦 Booking", "🚢 Container Movement", "🧾 Invoice Compliance"])
+
+# =============================================================================
+# GLOBAL SIDEBAR FILTERS (Outside tabs to prevent state loss)
+# =============================================================================
+st.sidebar.header("🔍 Dashboard Filters")
+
+# Booking filters
+with st.sidebar.expander("📦 Booking Filters", expanded=True):
+    date_range = st.date_input(
+        "Select Booking Date Range",
+        value=(
+            pd.Timestamp.today() - pd.Timedelta(days=7),
+            pd.Timestamp.today()
+        ),
+        key="booking_date_range"
+    )
+
+# Invoice Compliance filters (loaded before tabs)
+invoice_eta_dates = pd.to_datetime(invoice_compliance_raw["port_eta"], errors="coerce", format="mixed") if not invoice_compliance_raw.empty else pd.Series(dtype='datetime64[ns]')
+ic_min_date = invoice_eta_dates.min() if len(invoice_eta_dates) > 0 else None
+ic_max_date = invoice_eta_dates.max() if len(invoice_eta_dates) > 0 else None
+
+with st.sidebar.expander("🧾 Invoice Compliance Filters", expanded=False):
+    ic_eta_from = st.date_input(
+        "Port ETA From",
+        value=ic_min_date.date() if pd.notna(ic_min_date) else None,
+        key="ic_eta_from"
+    )
+    ic_eta_to = st.date_input(
+        "Port ETA To",
+        value=ic_max_date.date() if pd.notna(ic_max_date) else None,
+        key="ic_eta_to"
+    )
+    ic_arrival = st.selectbox("Arrival Status", ["All", "Approaching", "Today", "Past ETA"], key="ic_arrival")
+    ic_missing_type = st.selectbox("Missing Bill Type", ["All", "Ocean Freight", "Customs", "Duty", "Drayage"], key="ic_missing_type")
+    ic_readiness = st.selectbox("Invoice Readiness", ["All", "Complete", "Incomplete", "Pending Only"], key="ic_readiness")
+
+# =============================================================================
+# TAB 1: BOOKING PERFORMANCE DASHBOARD
+# =============================================================================
 with tab1:
-    
-    
-    # =============================================================================
-    # CONFIG
-    # =============================================================================
-    
     st.title("📦 Booking Performance Dashboard")
-    
 
     # =============================================================================
-    # CLEAN DATA
+    # CLEAN & PREPARE DATA
     # =============================================================================
     bookings.columns = bookings.columns.str.lower().str.strip()
-    
     bookings["event_date"] = pd.to_datetime(bookings["event_date"], errors="coerce")
     bookings["etd"] = pd.to_datetime(bookings["etd"], errors="coerce")
-    
+
     # =============================================================================
-    # DEFINE TRUE BOOKING LOGIC (BUSINESS RULE)
+    # DEFINE TRUE BOOKING LOGIC
     # =============================================================================
     bookings["is_booking"] = (
         (bookings["event_status"] == "BOOKED") |
@@ -77,34 +129,15 @@ with tab1:
             (bookings["etd"].notna())
         )
     )
-    
-    # =============================================================================
-    # SIDEBAR FILTERS (SAFE DATE HANDLING)
-    # =============================================================================
-    st.sidebar.header("🔍 Filters")
-    
-    date_range = st.sidebar.date_input(
-        "Select Booking Date Range",
-        value=(
-            pd.Timestamp.today() - pd.Timedelta(days=7),
-            pd.Timestamp.today()
-        ),
-        key="booking_date_range"
-    )
-    
-    # -----------------------------------------------------------------------------
-    # STRICT VALIDATION (RECOMMENDED)
-    # -----------------------------------------------------------------------------
+
+    # Validate date range
     if not (isinstance(date_range, tuple) and len(date_range) == 2):
         st.warning("⚠️ Please select both start and end date")
         st.stop()
-    
+
     start_date, end_date = date_range
-    
     start_date = pd.to_datetime(start_date)
-    end_date = pd.to_datetime(end_date)
-    # FIX END DATE INCLUSIVITY
-    end_date = end_date + pd.Timedelta(days=1)
+    end_date = pd.to_datetime(end_date) + pd.Timedelta(days=1)  # Inclusive end date
     
     st.caption(
         f"Showing data from {start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')}"
@@ -230,7 +263,7 @@ with tab1:
     today = pd.Timestamp.today()
     
     today_sailed = latest_etd_df[
-        latest_etd_df["etd"].astype(str).str[:10] == today.date()
+        latest_etd_df["etd"].dt.normalize() == today.normalize()
     ]["container_id"].nunique()
     
     # =============================================================================
@@ -839,5 +872,256 @@ with tab2:
 
     else:
         st.info("No delay data available")
-        
-        
+
+
+# =============================================================================
+# TAB 3 — INVOICE COMPLIANCE DASHBOARD (REDESIGNED)
+# Per business requirements: operational data only, per-SIPL compliance scoring
+# =============================================================================
+with tab3:
+    st.title("🧾 Invoice Compliance Dashboard")
+    st.markdown("**Purpose:** Track which invoices are Missing, Pending, or Complete for each active container in transit.")
+
+    if invoice_compliance_raw.empty:
+        st.error(
+            "❌ No invoice_compliance data found. "
+            "Run `python build_dashboard_data.py` to generate it."
+        )
+        st.stop()
+
+    # =========================================================================
+    # Additional inline filters (if sidebar is insufficient)
+    # =========================================================================
+    st.subheader("📋 Additional Filters")
+
+    col_ff, col_dest, col_search = st.columns(3)
+
+    def _get_options(col_name):
+        """Extract unique values from a column with semicolon-separated values"""
+        if col_name not in invoice_compliance_raw.columns:
+            return ["All"]
+        vals = sorted(set(
+            v.strip() for cell in invoice_compliance_raw[col_name].dropna().astype(str)
+            for v in cell.split(",") if v.strip()
+        ))
+        return ["All"] + vals
+
+    with col_ff:
+        ic_forwarder = st.selectbox("Freight Forwarder", _get_options("freight_forwarder"), key="ic_forwarder")
+    with col_dest:
+        ic_destination = st.selectbox("Destination", _get_options("destination"), key="ic_destination")
+    with col_search:
+        ic_search = st.text_input("Search (Container/SIPL/PO)", "", key="ic_search")
+
+    # =========================================================================
+    # RUN OPERATIONAL INVOICE DASHBOARD ENGINE
+    # =========================================================================
+    try:
+        # Clean column names to remove any trailing/leading spaces
+        invoice_compliance_clean = invoice_compliance_raw.copy()
+        invoice_compliance_clean.columns = invoice_compliance_clean.columns.str.strip()
+
+        result = get_operational_invoice_dashboard(
+            invoice_compliance_clean,
+            eta_start=ic_eta_from,
+            eta_end=ic_eta_to,
+            arrival_status=ic_arrival if ic_arrival != "All" else "All",
+            missing_bill_type=ic_missing_type if ic_missing_type != "All" else "All",
+            freight_forwarder=ic_forwarder if ic_forwarder != "All" else "All",
+            destination=ic_destination if ic_destination != "All" else "All",
+            vendor="All",
+            invoice_readiness=ic_readiness if ic_readiness != "All" else "All",
+            search_text=ic_search if ic_search else None,
+        )
+        kpi = result["kpi"]
+        missing_df = result["missing_df"]
+        pending_df = result["pending_df"]
+        filtered_df = result["filtered"]
+    except KeyError as ke:
+        st.error(f"❌ Column not found: {ke}. This usually means the Excel file structure doesn't match expectations.")
+        st.info("Please make sure you uploaded the correct dashboard_data.xlsx file generated by build_dashboard_data.py")
+        st.stop()
+    except Exception as e:
+        st.error(f"❌ Error processing invoice compliance data: {type(e).__name__}: {e}")
+        st.info("Try re-running: python build_dashboard_data.py")
+        st.stop()
+
+    # =========================================================================
+    # COMPLIANCE KPI (Top-Line Summary)
+    # =========================================================================
+    st.markdown("---")
+    st.subheader("📊 Invoice Compliance Summary")
+
+    kpi_cols = st.columns(5)
+    with kpi_cols[0]:
+        st.metric(
+            "Compliance Rate",
+            f"{kpi['compliance_pct']}%",
+            f"{kpi['ready_count']}/{kpi['total_count']}"
+        )
+    with kpi_cols[1]:
+        st.metric("🌾 Ocean Freight Missing", kpi["ocean_freight_missing"])
+    with kpi_cols[2]:
+        st.metric("🚢 Customs Missing", kpi["customs_missing"])
+    with kpi_cols[3]:
+        st.metric("💰 Duty Missing", kpi["duty_missing"])
+    with kpi_cols[4]:
+        st.metric("🚚 Drayage Missing", kpi["drayage_missing"])
+
+    st.markdown("---")
+
+    # =========================================================================
+    # HIGH PRIORITY: CONTAINERS AT/REACHING PORT WITH MISSING BILLS
+    # =========================================================================
+    st.subheader("🚨 HIGH PRIORITY — Containers At Port With Missing Bills")
+
+    # Filter for containers arriving/at port with missing bills
+    urgent_shipments = filtered_df[
+        (filtered_df["overall_status"] == "Missing") &
+        (filtered_df["arrival_status"].isin(["Past ETA", "Today", "Approaching"]))
+    ].copy()
+
+    if not urgent_shipments.empty:
+        urgent_count = len(urgent_shipments)
+        st.error(f"⚠️ {urgent_count} container(s) arriving/at port with MISSING invoices — Immediate action required!")
+
+        # Break down by urgency
+        col1, col2, col3 = st.columns(3)
+        past_eta = len(urgent_shipments[urgent_shipments["arrival_status"] == "Past ETA"])
+        today = len(urgent_shipments[urgent_shipments["arrival_status"] == "Today"])
+        approaching = len(urgent_shipments[urgent_shipments["arrival_status"] == "Approaching"])
+
+        with col1:
+            st.metric("🔴 Already Past ETA", past_eta)
+        with col2:
+            st.metric("🟡 Arriving Today", today)
+        with col3:
+            st.metric("🟠 Approaching (0-3 Days)", approaching)
+
+        # Display urgent containers sorted by urgency (Past ETA first, then Today, then Approaching)
+        urgent_display = urgent_shipments[["container", "sipl", "port_eta", "arrival_status",
+                                           "missing_categories", "freight_forwarder", "destination"]].copy()
+        urgent_display = urgent_display.rename(columns={
+            "container": "Container",
+            "sipl": "SIPL",
+            "port_eta": "Port ETA",
+            "arrival_status": "Status",
+            "missing_categories": "Missing Bills",
+            "freight_forwarder": "Freight Forwarder",
+            "destination": "Destination"
+        })
+
+        # Sort by urgency
+        status_order = {"Past ETA": 0, "Today": 1, "Approaching": 2}
+        urgent_display["_sort"] = urgent_display["Status"].map(status_order)
+        urgent_display = urgent_display.sort_values("_sort").drop(columns=["_sort"])
+
+        st.subheader("Urgent Containers (Sorted by Urgency)")
+        st.dataframe(
+            urgent_display,
+            use_container_width=True,
+            hide_index=True
+        )
+
+        # Export option
+        if st.button("📥 Export Urgent Containers to CSV"):
+            csv = urgent_display.to_csv(index=False)
+            st.download_button(
+                label="Download CSV",
+                data=csv,
+                file_name="urgent_containers_missing_bills.csv",
+                mime="text/csv"
+            )
+
+    else:
+        st.success("✅ No urgent issues — All containers arriving at/at port have complete invoices!")
+
+    st.markdown("---")
+
+    # =========================================================================
+    # MISSING / PENDING VIEWS (Inner Tabs)
+    # =========================================================================
+    sub_missing, sub_pending, sub_complete = st.tabs([
+        f"🔴 Missing Bills ({len(missing_df)})",
+        f"⏳ Pending Bills ({len(pending_df)})",
+        f"✅ Complete ({kpi['ready_count']})",
+    ])
+
+    with sub_missing:
+        st.markdown(
+            "**Missing:** No actual invoice exists + No pending placeholder exists for this category."
+        )
+        if missing_df.empty:
+            st.success("✅ No missing bills for the current filters.")
+        else:
+            st.caption(f"Showing {len(missing_df)} SIPLs with missing invoices")
+            st.dataframe(
+                missing_df,
+                use_container_width=True,
+                hide_index=True
+            )
+
+    with sub_pending:
+        st.markdown(
+            "**Pending:** A placeholder bill (\"PEND\") exists; awaiting final vendor invoice. "
+            "Shown only when vendor history or process-of-elimination clearly indicates the category."
+        )
+        if pending_df.empty:
+            st.info(
+                "ℹ️ No categorized pending bills in this filter view. "
+                "Pending bills are only shown when their category can be confidently inferred."
+            )
+        else:
+            st.caption(f"Showing {len(pending_df)} SIPLs with pending invoices")
+            st.dataframe(
+                pending_df,
+                use_container_width=True,
+                hide_index=True
+            )
+
+    with sub_complete:
+        st.markdown("**Complete:** All required invoice categories have confirmed GL records.")
+        complete_df = filtered_df[filtered_df["overall_status"] == "Complete"].copy()
+        if complete_df.empty:
+            st.info("ℹ️ No shipments have complete invoice coverage in this filter view.")
+        else:
+            st.caption(f"Showing {len(complete_df)} SIPLs with complete invoice coverage")
+            st.dataframe(
+                complete_df,
+                use_container_width=True,
+                hide_index=True
+            )
+
+    # =========================================================================
+    # RECONCILIATION REPORT (Hidden by default)
+    # =========================================================================
+    with st.expander("📊 Reconciliation Report (Unmatched Bills Audit)"):
+        st.markdown(
+            "**Purpose:** Track every unmatched bill and the reason it couldn't be matched to a "
+            "live container. This ensures complete audit trail — no invoices are silently dropped."
+        )
+
+        if "unmatched_bills" in xls.sheet_names:
+            try:
+                unmatched_bills = pd.read_excel(xls, "unmatched_bills")
+                if not unmatched_bills.empty:
+                    st.write(f"**Total Unmatched Bills: {len(unmatched_bills):,}**")
+                    st.dataframe(
+                        unmatched_bills,
+                        use_container_width=True,
+                        hide_index=True
+                    )
+                else:
+                    st.info("✅ All bills successfully matched to active shipments!")
+            except Exception as e:
+                st.warning(f"Could not load unmatched bills report: {e}")
+        else:
+            st.warning("📁 unmatched_bills sheet not found in uploaded file")
+
+        if "reconciliation_audit" in xls.sheet_names:
+            try:
+                audit = pd.read_excel(xls, "reconciliation_audit")
+                st.subheader("Audit Summary")
+                st.dataframe(audit, use_container_width=True, hide_index=True)
+            except Exception as e:
+                st.warning(f"Could not load audit report: {e}")
