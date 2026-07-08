@@ -4,198 +4,188 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**Logistics Control Tower** is a Streamlit-based dashboard for tracking container shipments, bookings, and invoice compliance across logistics operations. The system integrates with SQL Server for data persistence and processes multiple Excel-based data sources.
+**Logistics Control Tower** is a Streamlit-based dashboard for tracking container shipments and invoice compliance. The system integrates with SQL Server for local deployment and provides a file-based cloud variant.
 
-Two deployment variants exist:
-- **Local** (`app.py` + `logic.py`): Direct SQL Server connection via pyodbc
-- **Cloud** (`app_cloud.py` + `logic_cloud.py`): File-based (uploads Excel exports)
+### Two Deployment Variants
+- **Local** (`app.py`): Direct SQL Server connection
+- **Cloud** (`app_cloud.py`): File-based (users upload Excel)
 
-## Architecture & Data Flow
+## Architecture
 
-### Core Modules
+### Core Files
 
-| File | Purpose | Deployment |
-|------|---------|-----------|
-| `app.py` | Main Streamlit dashboard UI; 3 tabs: Booking, Container Movement, Invoice Compliance | Local (SQL Server) |
-| `app_cloud.py` | Streamlit dashboard that reads from uploaded Excel files | Cloud (file-based) |
-| `logic.py` | Data loading and transformation; interfaces with SQL Server via SQLAlchemy | Local |
-| `logic_cloud.py` | Pure data transformation; no DB dependency | Cloud |
-| `ETL_Clean_Load.py` | Ingests source Excel files, cleans data, loads into `logistics_db` SQL Server | Scheduled (Windows Task Scheduler) |
-| `generate_dashboard_data.py` | Runs ETL, then exports SQL data to `dashboard_data.xlsx` for cloud deployment | Manual or scheduled |
-| `utils.py`, `Invoice_working.py`, `build_dashboard_data.py`, `clean_excel_sheets.py` | Supporting utilities | ETL/export pipeline |
+| File | Purpose | Type |
+|------|---------|------|
+| `app.py` | Local Streamlit dashboard (3 tabs) | App |
+| `app_cloud.py` | Cloud Streamlit dashboard (file upload) | App |
+| `logic.py` | Data layer for local (SQL Server) | Logic |
+| `logic_cloud.py` | Data layer for cloud (file-based) | Logic |
+| `build_dashboard_data.py` | Main ETL pipeline (orchestrates all data generation) | ETL |
+| `build_dashboard_data_v3.py` | Invoice compliance calculation (called by build_dashboard_data.py) | ETL |
+| `ETL_Clean_Load.py` | Legacy ETL (loads source Excel → SQL Server) | ETL |
+| `utils.py` | Utility functions (Excel loading, data cleaning) | Utilities |
 
 ### Database
+- **Local Only**: SQL Server (`localhost\SQLEXPRESS01`), database `logistics_db`
+- **Cloud**: No database required (Excel-based)
 
-- **Engine**: SQL Server (`localhost\SQLEXPRESS01`)
-- **Database**: `logistics_db`
-- **Key Tables**: `bookings`, `shipment_mapping`, `open_po`, `in_transit`, `inventory_intransit`, `supplier_invoices`, `bills`, `qc_snapshot`
-- **Connection**: pyodbc with SQLAlchemy ORM; `pool_pre_ping=True` to verify connection before use
+## Data Pipeline
 
-### Data Sources
+### How Data Gets Built (build_dashboard_data.py)
+1. Runs `ETL_Clean_Load.py` (legacy ETL: Excel → SQL Server)
+2. Runs `build_dashboard_data_v3.py` (invoice compliance calculation)
+3. Exports SQL Server tables to Excel sheets
+4. Loads invoice_compliance CSV and includes as Excel sheet
+5. Creates `dashboard_data.xlsx` with all sheets
 
-All source files in `C:\Users\Abhay\Architectural Surfaces\Mohan - Logistics\Logistics Tracker\`:
-- `Freight Bills Processed - 2026.xlsm` (team-managed master)
-- `Bookings Tracker.xlsx`
-- Various SPS export files (HTML/XLS format)
+### How App Consumes Data (app_cloud.py)
+1. User uploads `dashboard_data.xlsx`
+2. App reads all sheets from Excel
+3. `logic_cloud.py` processes sheets
+4. Dashboard displays results
 
-These are cleaned and normalized in ETL, then loaded into SQL Server tables.
-
-## Development Setup
-
-### Prerequisites
-
-- Python 3.13 (see `.venv\pyvenv.cfg`)
-- Windows environment (hardcoded paths use Windows conventions)
-- SQL Server with ODBC drivers (17 or 18 for SQL Server)
-- Local SQL Server instance running with `logistics_db` created
-
-### Environment
-
-**Virtual Environment:**
-```powershell
-.venv\Scripts\Activate.ps1
+### File Flow
+```
+Source Excel Files
+    ↓
+ETL_Clean_Load.py
+    ↓
+SQL Server (logistics_db)
+    ↓
+build_dashboard_data.py ←→ build_dashboard_data_v3.py
+    ↓
+dashboard_data.xlsx
+    ↓
+app_cloud.py (Streamlit)
+    ↓
+Dashboard Display
 ```
 
-**Dependencies:**
+## Invoice Compliance Business Logic
+
+**Location**: `build_dashboard_data_v3.py` (310 lines, production-ready)
+
+### What It Does
+Answers: "For every container reaching port in 2-3 days or 7 days, which invoices are Complete/Pending/Missing?"
+
+### Data Scope
+**Inputs:**
+- In-Transit List by SIPL (operational shipments)
+- Bills.xls (invoice registry with bill_inv values)
+- GL 1275 (Capitalized Inventory Freight)
+- GL 1313 (Prepaid Container Freight)
+
+**Outputs:**
+- 84 SIPLs reaching port (within ETA window)
+- Per-SIPL, per-category (Ocean Freight, Customs, Duty, Drayage) status
+- Result: `invoice_compliance_v3_final.csv`
+
+### 7-Step Pipeline
+1. **Load Shipments**: Filter In-Transit to ISO 6346 containers (international only) → 234 valid
+2. **Filter by ETA**: Port ETA 2-3 days OR Location ETA 7 days → 84 SIPLs in scope
+3. **Match Bills**: Load Bills, match by container or SIPL → 85 bills matched
+4. **Load GL**: Combine GL 1275 + 1313, filter to alphabetic descriptions only → 6,353 entries
+5. **Classify GL**: Map descriptions to 4 categories (OF→Ocean Freight, CU→Customs, DU→Duty, DR→Drayage)
+6. **Match GL to Bills**: Join on normalized invoice numbers → 114 GL entries matched
+7. **Score Compliance**: For each SIPL, for each category, assign Complete/Pending/Missing
+
+### Scoring Logic (CRITICAL)
+For each SIPL, for each category:
+
+1. **Complete** = GL entry exists
+   - Example: GL has invoice='6143/26I A' with description='OF' (Ocean Freight)
+
+2. **Pending** = NO GL entry BUT bill_inv='PENDING' exists
+   - Example: Bills has PENDING marker, meaning invoice team is waiting for vendor
+
+3. **Missing** = NO GL entry AND (NO PENDING marker AND no real bill)
+   - Example: Container reaching tomorrow, no invoice received yet
+
+**Key Insight**: PENDING marker indicates entry was made by invoice team. If it exists, category is Pending (not Missing).
+
+### Example: SIPL 155933B
+```
+Container: SEGU3671280
+Bills: 'PENDING' + '6143/26I A'
+GL: invoice='6143/26I A' with desc='OF'
+
+Scoring:
+  Ocean Freight: Complete (GL entry exists)
+  Customs: Pending (no GL, but PENDING marker exists)
+  Duty: Pending (no GL, but PENDING marker exists)
+  Drayage: Pending (no GL, but PENDING marker exists)
+
+Overall: Pending
+```
+
+### GL Description Classification
+Handles both abbreviations and full text:
+- **Abbreviations**: OF/OI→Ocean Freight, CU/CA→Customs, DU→Duty, DR→Drayage
+- **Full text**: OCEAN FREIGHT, CUSTOM, DUTY, DRAYAGE, DRYAGE, CARTAGE, LOCAL
+
+## Current Results
+- **84 SIPLs** analyzed (reaching port within ETA window)
+- **Complete**: 4 (4.8%) — all invoices received
+- **Pending**: 28 (33.3%) — awaiting vendor invoices
+- **Missing**: 52 (61.9%) — no invoices yet
+
+## Running the System
+
+### Generate Dashboard Data
 ```bash
-pip install -r requirements.txt
+python build_dashboard_data.py
 ```
+Output: `dashboard_data.xlsx` (with invoice_compliance sheet)
 
-Key packages:
-- `streamlit` — UI framework
-- `pandas`, `numpy` — Data manipulation
-- `openpyxl` — Excel I/O
-- `sqlalchemy`, `pyodbc` — SQL Server connection
-- `altair` — Charting
-- `python-dateutil`, `rapidfuzz` — Utilities
-
-## Common Commands
-
-### Run Locally (SQL Server)
+### Run Local App (SQL Server)
 ```bash
 streamlit run app.py
 ```
-App opens on `http://localhost:8501` and reads from `logistics_db`.
 
-### Run Cloud Version (File-based)
+### Run Cloud App (File-based)
 ```bash
 streamlit run app_cloud.py
 ```
-Prompts user to upload `dashboard_data.xlsx`.
+Then upload `dashboard_data.xlsx` in sidebar
 
-### Run ETL Pipeline
-```bash
-python ETL_Clean_Load.py
-```
-Reads source Excel files, validates, cleans, and loads into SQL Server. Records issues in `qc_snapshot` table for audit trail.
+## Key Files to Know
 
-### Generate Dashboard Export
-```bash
-python generate_dashboard_data.py
-```
-Runs ETL (above), then exports SQL data to:
-- Dated: `...\Dashboards\Container Movement Control Tower\dashboard_data_YYYY-MM-DD.xlsx`
-- Latest: `...\Dashboards\Container Movement Control Tower\dashboard_data.xlsx`
+### Main Entry Points
+- `build_dashboard_data.py` — Run this to build all data
+- `app_cloud.py` — Run this to display dashboard (cloud variant)
 
-(These paths are hardcoded in the script; adjust if needed.)
+### Logic/Calculations
+- `logic_cloud.py` — Core dashboard calculations
+- `build_dashboard_data_v3.py` — Invoice compliance calculations (called by build_dashboard_data.py)
 
-## Key Logic Patterns
+### Data Utilities
+- `utils.py` — Excel loading, column standardization, date parsing, container cleaning
 
-### Data Loading & Normalization
+## Important Notes
 
-In `logic.py`, all load functions normalize data consistently:
-- Column names: lowercase, stripped whitespace
-- Container IDs: uppercase, stripped
-- PO numbers: numeric (Int64 type to handle NaN)
-- Dates: parsed to datetime
-- Status fields: uppercase
+1. **No Manual CSV Handling**: The CSV is generated inside `build_dashboard_data.py` automatically
+2. **One Excel File**: User only needs to upload `dashboard_data.xlsx` to the app
+3. **No Database Required for Cloud**: File-based approach eliminates SQL Server dependency
+4. **Backward Compatible**: Legacy data (bookings, open_po) still exported for other dashboards
 
-Example from `load_bookings()`:
-```python
-df["po_number"] = pd.to_numeric(df["po_number"], errors="coerce").astype("Int64")
-df["event_status"] = df["event_status"].astype(str).str.strip().str.upper()
-```
+## Common Tasks
 
-### Mapping & Merge
+### Update Invoice Compliance Logic
+Edit: `build_dashboard_data_v3.py` (lines 200-280 contain scoring logic)
 
-`shipment_mapping` table links PO numbers to container IDs. When merging with `bookings`, use suffixes to avoid collisions, then coalesce missing values:
-```python
-df = df.merge(mapping[["po_number", "container_id"]], 
-              on="po_number", how="left", suffixes=("", "_map"))
-df["container_id"] = df["container_id"].combine_first(df["container_id_map"])
-```
+### Add New Dashboard Tab
+Edit: `app_cloud.py` → `logic_cloud.py` → add calculation function
 
-### Streamlit Dashboard Structure
+### Change ETA Window
+Edit: `build_dashboard_data_v3.py` line 60-68 (currently 2-3 days port, 7 days location)
 
-- `st.set_page_config()` must be the first Streamlit call
-- Use tabs to organize domains (Booking, Container Movement, Invoice Compliance)
-- Import all compute functions upfront (`from logic import ...`)
-- Load data once per page refresh using `@st.cache_resource` where appropriate
+## Troubleshooting
 
-## Testing & Verification
+**App shows "Please upload dashboard_data.xlsx"**
+→ Run `python build_dashboard_data.py` first
 
-- No automated test suite; verify manually in Streamlit UI
-- Watch for data mismatches between SQL and Excel (addressed by `qc_snapshot` audit trail)
-- ETL errors are logged to stdout; check before running export
+**Invoice compliance sheet missing**
+→ Check `build_dashboard_data_v3.py` ran successfully (check stdout for errors)
 
-## File Structure (Project Root)
-
-```
-.
-├── app.py                           # Local dashboard
-├── app_cloud.py                     # Cloud dashboard
-├── logic.py                         # Local data logic (SQL Server)
-├── logic_cloud.py                   # Cloud data logic (Excel-based)
-├── ETL_Clean_Load.py                # ETL pipeline
-├── generate_dashboard_data.py       # Export dashboard data
-├── requirements.txt                 # Python dependencies
-├── utils.py                         # Helper functions
-├── Invoice_working.py               # Invoice-specific logic
-├── build_dashboard_data.py          # Dashboard export utilities
-├── clean_excel_sheets.py            # Excel cleanup
-└── [Excel files, .spyproject/, __pycache__, .venv/, etc.]
-```
-
-## Deployment
-
-**Local:**
-- Requires SQL Server and ODBC driver
-- Schedule ETL via Windows Task Scheduler
-- Run Streamlit manually or via scheduler
-
-**Cloud:**
-- No SQL Server required; operates on uploaded Excel
-- User uploads `dashboard_data.xlsx` in sidebar
-- `generate_dashboard_data.py` produces this file (run before deploying)
-
-## Common Gotchas
-
-1. **ODBC Driver**: Script tries ODBC 17 first, falls back to 18. If neither is installed, `get_engine()` will fail. Verify drivers on the machine.
-
-2. **File Paths**: Many paths are hardcoded (e.g., `TEAM_FILE_PATH` in ETL). Update if source or output locations change.
-
-3. **Encoding**: HTML/XLS parsing uses `encoding="utf-8"` and `recover=True` to handle malformed sources. If a new source format breaks, check parser settings in ETL.
-
-4. **Data Freshness**: Dashboard is as fresh as the last ETL run. If data seems stale, check the SQL Server `qc_snapshot` table for ETL errors.
-
-5. **Normalization Assumptions**: All load functions expect specific column names. If a source adds or renames columns, ETL may fail silently (check QC snapshot).
-
-## Useful SQL Queries
-
-```sql
--- Check latest QC run
-SELECT TOP 10 * FROM qc_snapshot ORDER BY run_date DESC;
-
--- Verify bookings loaded
-SELECT COUNT(*) FROM bookings;
-
--- Find container-PO mismatches
-SELECT * FROM shipment_mapping WHERE container_id IS NULL;
-```
-
-## Future Enhancements
-
-- Add automated tests for ETL transformations
-- Implement error notifications (email/Slack) when ETL fails
-- Cache expensive dataframe operations in Streamlit
-- Consider moving hardcoded paths to a config file
+**ETL fails on Excel load**
+→ Check file path in `utils.py` `load_html_table()` function
