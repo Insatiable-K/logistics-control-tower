@@ -20,15 +20,29 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 from utils import (
     load_html_table, clean_in_transit_dataframe, clean_inventory_detail_dataframe,
-    standardize_columns, clean_currency
+    filter_inventory_to_tracked_sipls, standardize_columns, clean_currency
 )
 
 
 @st.cache_data
+def load_sipl_universe():
+    """Load the SIPL tracking list — the authoritative 'currently active' shipment universe."""
+    raw = load_html_table(Path("In-Transit List by SIPL.xls"))
+    df, _, _ = clean_in_transit_dataframe(raw)
+    return df
+
+
+@st.cache_data
 def load_and_clean_inventory():
-    """Load Inventory In Transit - Detail.xls and clean it (shared logic in utils.py)."""
+    """
+    Load Inventory In Transit - Detail.xls, clean it, and drop any rows for
+    SIPLs that don't appear on the tracking list (shared logic in utils.py).
+    A SIPL missing from the tracking list has fallen off the "currently
+    active" universe (already completed, or a stale export) and shouldn't
+    count in Inventory Detail's own totals either.
+    """
     raw = load_html_table(Path("Inventory In Transit - Detail .xls"))
-    df, original_count, final_count = clean_inventory_detail_dataframe(raw)
+    df, original_count, after_container_filter = clean_inventory_detail_dataframe(raw)
 
     # Pre-filter total value, computed live (not hardcoded) so the "how much
     # value did we lose by dropping domestic/parcel rows" comparison below
@@ -36,21 +50,16 @@ def load_and_clean_inventory():
     # shared low-level primitive, not a duplication of the cleaning pipeline.
     original_total_value = clean_currency(standardize_columns(raw)["total_cost"]).sum()
 
-    return df, original_count, final_count, original_total_value
+    sipl_universe = load_sipl_universe()
+    df, _, final_count = filter_inventory_to_tracked_sipls(df, sipl_universe)
 
-
-@st.cache_data
-def load_sipl_universe():
-    """Load the SIPL tracking list, used only for the cross-file coverage check."""
-    raw = load_html_table(Path("In-Transit List by SIPL.xls"))
-    df, _, _ = clean_in_transit_dataframe(raw)
-    return df
+    return df, original_count, after_container_filter, final_count, original_total_value
 
 
 def render_tab():
     """Render the full Inventory In Transit Insights view. Callable standalone or as a tab."""
 
-    inv_df, original_rows, cleaned_rows, original_total_value = load_and_clean_inventory()
+    inv_df, original_rows, after_container_filter, cleaned_rows, original_total_value = load_and_clean_inventory()
     sipl_universe = load_sipl_universe()
 
     total_value = inv_df["total_cost"].sum()
@@ -59,7 +68,8 @@ def render_tab():
     # WHAT THIS SHOWS
     # =========================================================================
     st.markdown("### What This Data Represents")
-    removed = original_rows - cleaned_rows
+    removed_domestic = original_rows - after_container_filter
+    removed_untracked_sipl = after_container_filter - cleaned_rows
     value_removed_pct = 100 * (original_total_value - total_value) / original_total_value if original_total_value > 0 else 0
     st.markdown(
         f"""
@@ -67,12 +77,20 @@ def render_tab():
         ocean-container shipment, broken down by product line, with quantities
         and dollar values.
 
-        **Scoped to container freight only.** Of {original_rows:,} product lines in
-        the raw export, **{removed:,} ({100*removed/original_rows:.0f}%) had no ocean
-        container** — mostly small parcel-shipped samples (UPS#..., FedEX#...) —
-        removed, since this view tracks container logistics specifically. Those
-        removed rows represented only **{value_removed_pct:.1f}% of total dollar
-        value**, confirming it was mostly low-value noise, not meaningful freight.
+        **Scoped to container freight, currently-tracked shipments only.** Of
+        {original_rows:,} product lines in the raw export:
+        - **{removed_domestic:,} ({100*removed_domestic/original_rows:.0f}%) had no ocean
+          container** — mostly small parcel-shipped samples (UPS#..., FedEX#...) —
+          removed, since this view tracks container logistics specifically.
+        - **{removed_untracked_sipl:,}** more were for a SIPL no longer on the
+          shipment tracking list — removed, since they're not part of the
+          currently-active universe (a SIPL only shows up as untracked once it's
+          already fully processed and dropped from tracking, or from a stale
+          export snapshot).
+
+        Together, those removed rows represented only **{value_removed_pct:.1f}%
+        of total dollar value**, confirming it was mostly low-value noise, not
+        meaningful freight.
 
         **{cleaned_rows:,} product line items**, covering **{inv_df['sipl'].nunique():,} shipments**.
         """
@@ -191,9 +209,10 @@ def render_tab():
 
     malformed = inv_df["category_is_malformed"].sum()
     notes = [
-        f"**{removed:,} row(s) removed** during cleaning — nearly all had no ocean "
-        "container (domestic/parcel, out of scope), a handful had no SIPL on file "
-        "at all (report footer artifacts)"
+        f"**{removed_domestic:,} row(s) removed** for having no ocean container "
+        "(domestic/parcel, out of scope) or no SIPL on file at all (report footer artifacts)",
+        f"**{removed_untracked_sipl:,} row(s) removed** for referencing a SIPL no "
+        "longer on the shipment tracking list (already fully processed, or a stale export)",
     ]
     if malformed > 0:
         notes.append(f"**{malformed} row(s)** have a malformed category value (numeric junk instead of a real category)")

@@ -1071,6 +1071,35 @@ def extract_country_from_port(port_series):
     return port_series.astype(str).str.extract(_COUNTRY_FROM_PORT)[0]
 
 
+def filter_inventory_to_tracked_sipls(inventory_clean, sipl_clean):
+    """
+    Drop Inventory Detail rows whose SIPL doesn't appear in the SIPL
+    tracking list. The tracking list is the authoritative "currently
+    active" shipment universe — an Inventory Detail row for a SIPL that has
+    fallen off that list (e.g. already completed/delivered and dropped from
+    tracking, or from a stale export) isn't part of the current operational
+    picture and shouldn't count in Inventory Detail's own totals either.
+
+    Verified against real data (2026-07-09): currently 0 of 415
+    container-tracked Inventory Detail rows are affected — every SIPL in
+    Inventory Detail already has a match in the tracking list today. This
+    filter exists for correctness going forward (a future data pull could
+    easily have stale rows), not because today's data currently needs it.
+
+    Args:
+        inventory_clean: output of clean_inventory_detail_dataframe() (first tuple element)
+        sipl_clean: output of clean_in_transit_dataframe() (first tuple element)
+
+    Returns:
+        (df_filtered, original_count, final_count)
+    """
+    original_count = len(inventory_clean)
+    tracked_sipls = set(sipl_clean["sipl"].astype(str).str.strip())
+    df = inventory_clean[inventory_clean["sipl"].astype(str).str.strip().isin(tracked_sipls)].copy()
+    final_count = len(df)
+    return df, original_count, final_count
+
+
 def merge_sipl_inventory(sipl_clean, inventory_clean):
     """
     Merge cleaned SIPL tracking data with cleaned Inventory Detail data via
