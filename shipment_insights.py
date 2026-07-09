@@ -68,6 +68,64 @@ def render_tab():
     )
 
     # =========================================================================
+    # VIEW 0: CURRENTLY ON THE WATER — the core operational cut
+    # =========================================================================
+    st.divider()
+    st.markdown("### 🌊 Currently On the Water")
+
+    st.markdown(
+        """
+        A shipment's `sipl_status` (SIPL Ready, Documents Sent, etc.) tracks
+        *paperwork* stage — it doesn't by itself say whether the container has
+        physically left origin yet. This view answers that directly: **has this
+        shipment actually sailed, and is it still in transit right now** (not
+        yet arrived at the branch)?
+
+        **Method**: a Bill of Lading is issued once cargo is loaded onto the
+        vessel — so a `ship_b_l_date` in the past is a real "has sailed"
+        signal. Shipments already at the branch are excluded even if they
+        technically sailed a while ago — they're on land now, not on water.
+        """
+    )
+
+    sailing_counts = summary["sailing_status"].value_counts()
+    on_water_now = summary[summary["is_currently_on_water"]]
+    at_branch_already = summary[(summary["sailing_status"] == "On the Water") & (summary["sipl_status"] == "At branch")]
+
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric("🌊 Currently On the Water", len(on_water_now))
+    with col2:
+        st.metric("Not Yet Sailed", int(sailing_counts.get("Not Yet Sailed", 0)))
+    with col3:
+        st.metric("Already Delivered", len(at_branch_already))
+    with col4:
+        st.metric("Cannot Determine", int(sailing_counts.get("Cannot Determine (No Detail)", 0)))
+
+    on_water_value = on_water_now["total_value"].sum()
+    all_in_transit_value = summary["total_value"].sum()
+    st.success(
+        f"**${on_water_value:,.0f}** of inventory value is currently on the water "
+        f"right now — this is the number that matters for active operations, not "
+        f"the full **${all_in_transit_value:,.0f}** in-transit total (which also "
+        f"includes shipments still awaiting booking and already-delivered ones)."
+    )
+
+    with st.expander(f"See all {len(on_water_now)} shipments currently on the water"):
+        on_water_display = on_water_now[
+            ["sipl", "container", "supplier", "ship_b_l_date", "eta_date", "total_value", "sipl_status"]
+        ].sort_values("eta_date")
+        st.dataframe(on_water_display, use_container_width=True, hide_index=True)
+
+    if sailing_counts.get("Cannot Determine (No Detail)", 0) > 0:
+        cannot_determine = summary[summary["sailing_status"] == "Cannot Determine (No Detail)"]
+        st.caption(
+            f"📌 {len(cannot_determine)} shipment(s) have no inventory detail record, "
+            "so there's no Bill of Lading date to check — genuinely unknown, not "
+            "assumed either way."
+        )
+
+    # =========================================================================
     # VIEW 1: VALUE AT RISK (LFD reframed by dollars, not just count)
     # =========================================================================
     st.divider()
@@ -235,42 +293,6 @@ def render_tab():
         )
     else:
         st.success("No transit-time anomalies found.")
-
-    # =========================================================================
-    # BONUS: "SIPL READY" SPLIT — UNCONFIRMED HYPOTHESIS
-    # =========================================================================
-    st.divider()
-    st.markdown("### 🧪 Experimental: Splitting \"SIPL Ready\" into Sailed vs. Not Yet Sailed")
-
-    st.info(
-        """
-        ℹ️ **This section is a hypothesis, not a confirmed fact** — flagging it
-        clearly rather than quietly changing the main status funnel.
-
-        The theory: a Bill of Lading is normally issued once cargo is actually
-        loaded onto the vessel, so a *past* `ship_b_l_date` should mean the
-        shipment has genuinely sailed. Tested against "SIPL Ready" shipments —
-        if this holds up, it could split that one status into two real states.
-        """
-    )
-
-    ready = detail[detail["sipl_status"] == "SIPL Ready"].drop_duplicates("sipl")
-    if len(ready) > 0:
-        today = pd.Timestamp.today().normalize()
-        sailed = ready[ready["ship_b_l_date"].notna() & (ready["ship_b_l_date"] <= today)]
-        not_yet = ready[ready["ship_b_l_date"].isna() | (ready["ship_b_l_date"] > today)]
-
-        col1, col2 = st.columns(2)
-        with col1:
-            st.metric("Likely Already Sailed", f"{len(sailed)} of {len(ready)}")
-        with col2:
-            st.metric("Likely Not Yet Sailed / No B/L Date", f"{len(not_yet)} of {len(ready)}")
-
-        st.caption(
-            "📌 Based only on the SIPLs that have matching Inventory Detail records "
-            "(so a B/L date is available to check) — not all 'SIPL Ready' shipments "
-            "have inventory detail yet."
-        )
 
     # =========================================================================
     # EXPORT

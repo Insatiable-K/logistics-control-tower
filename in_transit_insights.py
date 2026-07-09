@@ -124,12 +124,14 @@ def render_tab():
             st.write(f"- **{stage}**: {count} ({pct:.0f}%)")
             st.caption(STAGE_DESCRIPTIONS[stage])
 
+    sipl_ready_count = int(pipeline_counts.get("SIPL Ready", 0))
     st.info(
-        "ℹ️ **\"SIPL Ready\" note**: this one status label actually covers two "
-        "different real states — ready to sail (not yet departed) and already "
-        "sailed / in transit. The data doesn't currently split these cleanly; "
-        "until that's resolved, treat the 723-shipment (or however many show "
-        "today) SIPL Ready count as a mix of both, not a single stage."
+        f"ℹ️ **\"SIPL Ready\" note**: this one status label actually covers two "
+        f"different real states — ready to sail (not yet departed) and already "
+        f"sailed / on the water. The **{sipl_ready_count}** shipments shown here "
+        f"under SIPL Ready are a mix of both. See the **🔗 Shipment Insights** tab "
+        f"for the \"Currently On the Water\" view, which splits this out using "
+        f"each shipment's Bill of Lading date."
     )
 
     if len(exception_counts) > 0 or len(EXCEPTION_STATES) > 0:

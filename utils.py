@@ -1086,15 +1086,21 @@ def merge_sipl_inventory(sipl_clean, inventory_clean):
           - 'merged_detail': inner join, one row per inventory line item
             enriched with tracking status/dates (sipl_status, has_lfd, lfd,
             fr_forwarder, sipl_age_days). Only SIPLs present in both files.
-            Includes a 'transit_days' column (ship_b_l_date -> eta_date)
-            and 'has_transit_anomaly' flag (negative transit_days — ETA
-            before the ship date, which is impossible and always a data
-            error, not a real value).
+            Includes a 'transit_days' column (ship_b_l_date -> eta_date),
+            'has_transit_anomaly' flag (negative transit_days — ETA before
+            the ship date, which is impossible and always a data error,
+            not a real value), and 'is_on_water' (True when ship_b_l_date
+            is populated and in the past — the Bill of Lading is issued
+            once cargo is actually loaded, so this is a real "has sailed"
+            signal, not a guess).
           - 'sipl_summary': one row per container-tracked SIPL (ALL of
             them, including the ones with no inventory detail — those get
             value=0/item_count=0 rather than being dropped), for value-at-
             risk analysis that shouldn't undercount by silently excluding
-            undetailed SIPLs.
+            undetailed SIPLs. Includes 'sailing_status' — one of "On the
+            Water", "Not Yet Sailed", or "Cannot Determine (No Detail)"
+            (honest third state for the SIPLs with no inventory detail to
+            check a B/L date against, not folded into either other bucket).
           - 'container_consolidation': one row per container, with # of
             distinct SIPLs sharing it, total value, and a routing-
             consistency flag (ship_to/arrival_port/departure_port nunique
@@ -1111,16 +1117,46 @@ def merge_sipl_inventory(sipl_clean, inventory_clean):
     merged_detail["has_transit_anomaly"] = merged_detail["transit_days"] < 0
     merged_detail["departure_country"] = extract_country_from_port(merged_detail["departure_port"])
 
+    # "On the water" determination: a Bill of Lading is issued once cargo is
+    # actually loaded onto the vessel, so a ship_b_l_date in the past is a
+    # real signal the shipment has sailed — this is what actually matters
+    # operationally (vs. still sitting at origin awaiting booking/loading).
+    today = pd.Timestamp.today().normalize()
+    merged_detail["is_on_water"] = merged_detail["ship_b_l_date"].notna() & (merged_detail["ship_b_l_date"] <= today)
+
     # sipl_summary: LEFT join so every container-tracked SIPL is visible,
     # even the ones with no inventory detail yet (value/item_count = 0,
     # not silently dropped from a value-at-risk view).
     value_by_sipl = inventory_clean.groupby("sipl").agg(
-        total_value=("total_cost", "sum"), item_count=("total_cost", "count")
+        total_value=("total_cost", "sum"), item_count=("total_cost", "count"),
+        ship_b_l_date=("ship_b_l_date", "min"),
     )
     sipl_summary = sipl_clean.merge(value_by_sipl, on="sipl", how="left")
     sipl_summary["total_value"] = sipl_summary["total_value"].fillna(0)
     sipl_summary["item_count"] = sipl_summary["item_count"].fillna(0).astype(int)
     sipl_summary["has_detail"] = sipl_summary["item_count"] > 0
+
+    # Three-way sailing status across the FULL 225-SIPL universe (not just
+    # the 208 with inventory detail) — "Cannot Determine" is an honest third
+    # state for the 17 without a B/L date to check, not folded into either
+    # of the other two.
+    def _sailing_status(row):
+        if pd.isna(row["ship_b_l_date"]):
+            return "Cannot Determine (No Detail)"
+        return "On the Water" if row["ship_b_l_date"] <= today else "Not Yet Sailed"
+
+    sipl_summary["sailing_status"] = sipl_summary.apply(_sailing_status, axis=1)
+
+    # "Has sailed" (sailing_status == "On the Water") is broader than
+    # literally "currently on the water" — it also includes shipments that
+    # have since arrived and been delivered ("At branch" status). Verified
+    # against real data: ~7% of the "sailed" group is already at branch.
+    # is_currently_on_water excludes those, since a shipment sitting at the
+    # branch isn't "on water" anymore regardless of when its B/L was cut.
+    sipl_summary["is_currently_on_water"] = (
+        (sipl_summary["sailing_status"] == "On the Water")
+        & (sipl_summary["sipl_status"] != "At branch")
+    )
 
     # container_consolidation: grouped from sipl_clean (the full
     # container-tracked universe, 225 rows), not merged_detail, so
