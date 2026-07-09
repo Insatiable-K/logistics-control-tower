@@ -974,6 +974,14 @@ def clean_in_transit_dataframe(raw):
 
     df["has_lfd"] = df["lfd"].notna()
 
+    # LFD is issued by the origin-side team only once a container is
+    # physically at port — confirmed against real data: 0 of 164 SIPLs
+    # whose port_eta hasn't passed yet have an LFD on file, vs. 23 of 61
+    # that have already passed port_eta. So "no LFD" is only a real risk
+    # signal once the container has actually reached port; before that it's
+    # normal and expected, not a tracking gap.
+    df["has_arrived_at_port"] = df["port_eta"].notna() & (df["port_eta"] < today)
+
     final_count = len(df)
     return df, original_count, final_count
 
@@ -1004,6 +1012,11 @@ def build_sipl_container_rollup(sipl_clean):
     `sipl_age_days` uses the oldest (max) sibling, since that's the
     actionable "how long has any part of this container's process been
     open" signal.
+
+    `has_arrived_at_port` (port_eta already passed) gates whether "no LFD"
+    is actually a risk signal — confirmed with the business that LFD is
+    only issued once a container is physically at port, so a container
+    that hasn't arrived yet is expected to show no LFD, not flagged as one.
     """
     g = sipl_clean.groupby("container")
     rollup = g.agg(
@@ -1013,6 +1026,8 @@ def build_sipl_container_rollup(sipl_clean):
         sipl_status=("sipl_status", lambda s: s.dropna().iloc[0] if s.dropna().size else "Unknown"),
         has_lfd=("has_lfd", "any"),
         lfd=("lfd", "min"),
+        port_eta=("port_eta", "min"),
+        has_arrived_at_port=("has_arrived_at_port", "any"),
         ff_nunique=("fr_forwarder", lambda s: s.dropna().nunique()),
         fr_forwarder=("fr_forwarder", lambda s: s.dropna().iloc[0] if s.dropna().size else None),
         dp_nunique=("departure_port", lambda s: s.dropna().nunique()),

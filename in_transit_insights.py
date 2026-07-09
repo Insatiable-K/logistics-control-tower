@@ -200,25 +200,43 @@ def render_tab():
     # container at port), not a per-SIPL fact — verified 0 containers have
     # conflicting has_lfd values across sibling SIPLs, so the rollup is an
     # exact dedup, not an approximation.
+    #
+    # Confirmed with ops: the origin-side team does not issue an LFD until a
+    # container has physically arrived at port — verified against real data
+    # (0 of 92 not-yet-arrived containers have an LFD, vs. 21 of 32 arrived
+    # containers still missing one). So "no LFD" is only a real risk once
+    # has_arrived_at_port is True; before that it's expected, not a gap.
     has_lfd_containers = int(rollup["has_lfd"].sum())
     missing_lfd_containers = len(rollup) - has_lfd_containers
-    missing_pct = 100 * missing_lfd_containers / len(rollup) if len(rollup) > 0 else 0
-    missing_lfd_sipls = int((~sipl_df["has_lfd"]).sum())
+
+    at_risk = rollup[rollup["has_arrived_at_port"] & ~rollup["has_lfd"]]
+    not_yet_due = rollup[~rollup["has_arrived_at_port"] & ~rollup["has_lfd"]]
 
     st.error(
         f"""
-        **{missing_lfd_containers} of {len(rollup)} containers ({missing_pct:.0f}%)
-        have no Last Free Day (LFD) on file** ({missing_lfd_sipls} SIPL bookings
-        affected).
+        **{len(at_risk)} of {len(rollup)} containers have already reached port
+        but still have no Last Free Day (LFD) on file** — this is the real,
+        actionable demurrage risk.
 
         💡 **Why this matters**: LFD is the deadline to pick up a container from
-        port before daily storage/demurrage fees start accruing — it's the single
-        most financially risky date in ocean freight. A container with no LFD on
-        file isn't necessarily late, but it also isn't being actively monitored
-        for this specific risk. Worth confirming whether LFD tracking happens
-        elsewhere, or whether this is a real process gap.
+        port before daily storage/demurrage fees start accruing. Once a container
+        has arrived, a missing LFD means this risk isn't being actively monitored.
         """
     )
+
+    st.caption(
+        f"📌 {missing_lfd_containers} containers total show no LFD, but "
+        f"{len(not_yet_due)} of those haven't reached port yet — LFD isn't issued "
+        "until then, so that's expected, not a gap (confirmed with ops). Only the "
+        f"{len(at_risk)} above are actionable right now."
+    )
+
+    if len(at_risk) > 0:
+        with st.expander(f"See the {len(at_risk)} containers at risk (arrived, no LFD)"):
+            st.dataframe(
+                at_risk[["container", "port_eta", "sipl_status", "sipl_count"]].sort_values("port_eta"),
+                use_container_width=True, hide_index=True
+            )
 
     if has_lfd_containers > 0:
         with st.expander(f"See the {has_lfd_containers} containers that DO have an LFD on file"):
@@ -357,7 +375,9 @@ def render_tab():
         - **{removed:,} rows removed** during cleaning — all domestic truck/parcel
           shipments with no ocean container (out of scope for this view; see the
           "What This Data Represents" section above)
-        - **{missing_lfd_containers} containers ({missing_pct:.0f}%)** have no LFD — see the risk callout above
+        - **{len(at_risk)} containers** have arrived at port with no LFD on file — the
+          real demurrage risk (see the risk callout above; {len(not_yet_due)} more show
+          no LFD but haven't reached port yet, which is expected)
         - **{future_dated} container(s)** show a negative age (future-dated initiation)
         """
     )

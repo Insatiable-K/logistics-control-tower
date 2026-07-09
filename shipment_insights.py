@@ -236,39 +236,63 @@ def render_tab():
     st.divider()
     st.markdown("### 🔴 Value at Risk: Demurrage Exposure by Dollars, Not Just Count")
 
-    value_no_lfd = consolidation[~consolidation["has_lfd"]]["total_value"].sum()
-    value_has_lfd = consolidation[consolidation["has_lfd"]]["total_value"].sum()
-    total_value_lfd = value_no_lfd + value_has_lfd
-    pct_at_risk = 100 * value_no_lfd / total_value_lfd if total_value_lfd > 0 else 0
-    containers_no_lfd = (~consolidation["has_lfd"]).sum()
+    # Confirmed with ops: LFD is only issued once a container physically
+    # reaches port, so "no LFD" while still On the Water / Not Yet Sailed is
+    # expected, not a risk. The real, actionable risk is a container that
+    # HAS arrived (physical_status == "Arrived, Processing") but still has
+    # no LFD — sitting at port right now with no known pickup deadline.
+    at_risk = consolidation[(consolidation["physical_status"] == "Arrived, Processing") & (~consolidation["has_lfd"])]
+    not_yet_due = consolidation[
+        consolidation["physical_status"].isin(["On the Water", "Not Yet Sailed", "Cannot Determine (No Detail)", "Cannot Determine (No ETA Data)"])
+        & (~consolidation["has_lfd"])
+    ]
+    delivered_no_lfd = consolidation[(consolidation["physical_status"] == "Delivered (At Branch)") & (~consolidation["has_lfd"])]
+
+    value_at_risk = at_risk["total_value"].sum()
+    value_tracked = consolidation[consolidation["has_lfd"]]["total_value"].sum()
+    total_value_lfd = consolidation["total_value"].sum()
+    pct_at_risk = 100 * value_at_risk / total_value_lfd if total_value_lfd > 0 else 0
 
     st.error(
         f"""
-        **${value_no_lfd:,.0f} of ${total_value_lfd:,.0f} total value
-        ({pct_at_risk:.0f}%), across {containers_no_lfd} containers, sits in
-        shipments with no LFD (Last Free Day) on file.**
+        **${value_at_risk:,.0f} of ${total_value_lfd:,.0f} total value
+        ({pct_at_risk:.0f}%), across {len(at_risk)} containers, has already
+        arrived at port with no LFD (Last Free Day) on file.**
 
-        This is a sharper story than counting containers alone: the
-        untracked-for-demurrage-risk containers are disproportionately the
-        *high-value* ones, not a random cross-section. (LFD is a port-side
+        This is the real, actionable demurrage exposure — containers sitting
+        at port right now with no known pickup deadline. (LFD is a port-side
         deadline that applies to the whole physical container — reported
         here per container, not duplicated once per SIPL aboard it.)
         """
     )
 
+    st.caption(
+        f"📌 {len(not_yet_due)} more containers show no LFD but haven't reached "
+        "port yet — LFD isn't issued until then, so that's expected, not a gap "
+        f"(confirmed with ops). {len(delivered_no_lfd)} delivered containers also "
+        "had no LFD on file, shown separately below since that risk has already passed."
+    )
+
     col1, col2 = st.columns(2)
     with col1:
         fig = px.pie(
-            values=[value_no_lfd, value_has_lfd], names=["No LFD on file", "LFD on file"],
+            values=[value_at_risk, value_tracked], names=["At risk (arrived, no LFD)", "LFD on file"],
             title="Value at Risk vs. Tracked", color_discrete_sequence=["#e74c3c", "#2ecc71"]
         )
         st.plotly_chart(fig, use_container_width=True)
     with col2:
-        st.markdown("**Highest-value containers with no LFD:**")
-        top_risk = consolidation[~consolidation["has_lfd"]].nlargest(10, "total_value")[
-            ["container", "suppliers", "sipl_count", "total_value", "physical_status"]
+        st.markdown("**Highest-value containers at risk (arrived, no LFD):**")
+        top_risk = at_risk.nlargest(10, "total_value")[
+            ["container", "suppliers", "sipl_count", "total_value", "port_eta"]
         ]
         st.dataframe(top_risk, use_container_width=True, hide_index=True)
+
+    if len(delivered_no_lfd) > 0:
+        with st.expander(f"See {len(delivered_no_lfd)} delivered containers that had no LFD on file (risk already passed)"):
+            st.dataframe(
+                delivered_no_lfd[["container", "suppliers", "sipl_count", "total_value"]],
+                use_container_width=True, hide_index=True
+            )
 
     # =========================================================================
     # VIEW 2: CONTAINER CONSOLIDATION
