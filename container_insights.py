@@ -252,15 +252,24 @@ def render_tab():
         f"""
         **{len(pending_bill_detail)} pending bills** in this window couldn't be matched
         to a specific ledger entry (no real invoice number yet) — but every one of
-        them is tied to a known container. Listed individually here, not hidden.
+        them is tied to a known container. Rolled up by container below; the
+        individual bills are one click away.
         """
     )
 
-    if len(pending_bill_detail) > 0:
-        pending_display = pending_bill_detail.rename(columns={
-            "non_inventory_vendor": "vendor", "bill_inv": "placeholder_invoice_#"
-        })
-        st.dataframe(pending_display, use_container_width=True, hide_index=True)
+    pending_containers = ledger[ledger["awaiting_gl_count"] > 0][
+        ["container", "awaiting_gl_count", "pending_amount"]
+    ].rename(columns={"awaiting_gl_count": "pending_bills", "pending_amount": "pending_$"}).sort_values(
+        "pending_$", ascending=False
+    )
+
+    if len(pending_containers) > 0:
+        st.dataframe(pending_containers, use_container_width=True, hide_index=True)
+        with st.expander(f"See all {len(pending_bill_detail)} individual pending bills"):
+            pending_display = pending_bill_detail.rename(columns={
+                "non_inventory_vendor": "vendor", "bill_inv": "placeholder_invoice_#"
+            })
+            st.dataframe(pending_display, use_container_width=True, hide_index=True)
     else:
         st.success("No pending bills in this window.")
 

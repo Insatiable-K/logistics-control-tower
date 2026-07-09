@@ -22,7 +22,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 from utils import (
     load_html_table, clean_in_transit_dataframe, clean_inventory_detail_dataframe,
-    merge_sipl_inventory
+    merge_sipl_inventory, get_shipment_container_detail
 )
 
 
@@ -68,6 +68,54 @@ def render_tab():
     )
 
     # =========================================================================
+    # SEARCH A CONTAINER
+    # =========================================================================
+    st.divider()
+    st.markdown("### 🔍 Search a Container")
+    st.markdown("Look up one container's physical status, every SIPL aboard it, and its value.")
+
+    search_input = st.text_input(
+        "Enter a container number (e.g. MEDU2304983):", "", key="shipment_container_search"
+    ).strip().upper()
+
+    if search_input:
+        c_detail = get_shipment_container_detail(search_input, summary, consolidation)
+        if not c_detail["found"]:
+            st.error(f"No container-tracked shipment found for **{search_input}**. Check the spelling/format (4 letters + 7 digits).")
+        else:
+            st.success(f"**{search_input}** — {c_detail['sipl_count']} SIPL(s) aboard, ${c_detail['total_value']:,.0f} total value")
+
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                st.metric("Physical Status", c_detail["physical_status"])
+            with col2:
+                st.metric("SIPLs Aboard", c_detail["sipl_count"])
+            with col3:
+                st.metric("Total Value", f"${c_detail['total_value']:,.0f}")
+            with col4:
+                st.metric("Routing Consistent", "Yes" if c_detail["is_routing_consistent"] else "No")
+
+            if c_detail["has_mixed_status"]:
+                st.warning(
+                    "⚠️ The SIPLs aboard this container disagree on status even after "
+                    "sharing known dates — either genuine container reuse across "
+                    "unrelated shipments, or conflicting recorded dates for the same "
+                    "voyage. The status above is from the most recently active SIPL; "
+                    "see the full breakdown below."
+                )
+
+            st.markdown(
+                f"""
+                - **Ship date (B/L)**: {c_detail['ship_b_l_date'].strftime('%Y-%m-%d') if pd.notna(c_detail['ship_b_l_date']) else 'Unknown'}
+                - **Expected port arrival**: {c_detail['port_eta'].strftime('%Y-%m-%d') if pd.notna(c_detail['port_eta']) else 'Unknown'}
+                - **Expected branch arrival**: {c_detail['location_eta'].strftime('%Y-%m-%d') if pd.notna(c_detail['location_eta']) else 'Unknown'}
+                """
+            )
+
+            st.markdown("**All SIPLs aboard this container:**")
+            st.dataframe(c_detail["sipls"], use_container_width=True, hide_index=True)
+
+    # =========================================================================
     # VIEW 0: WHERE IS EVERYTHING, PHYSICALLY — the core operational cut
     # =========================================================================
     st.divider()
@@ -86,78 +134,99 @@ def render_tab():
         **no port ETA** exists at all, that's reported as genuinely unknown
         rather than assumed either way.
 
-        This matters in both directions: checking the data directly found
-        **36 shipments that have already passed their own port ETA** — some
-        by over a week — while still showing statuses like "D.O.s Received"
-        or "On Hold," none marked "At branch." It also found **20 shipments
-        with no port ETA at all** — these were previously being defaulted to
-        "on the water" just because status wasn't "At branch," the same
-        unreliable-status problem in the other direction. Both are now
-        called out explicitly instead of silently folded into "on the water."
+        **Reported at the container level, not the SIPL level.** A container
+        is one physical box — it can't be "on the water" twice just because
+        it happens to be carrying several consolidated shipments (SIPLs).
+        Where a container carries multiple SIPLs, known dates from any one
+        of them are shared across its siblings before status is judged (they
+        physically travel together), so a SIPL with no matching Inventory
+        Detail record isn't wrongly reported as unknown when its container-
+        mates already confirm the real dates.
         """
     )
 
-    on_water_now = summary[summary["physical_status"] == "On the Water"]
-    arrived_processing = summary[summary["physical_status"] == "Arrived, Processing"]
-    delivered = summary[summary["physical_status"] == "Delivered (At Branch)"]
-    not_yet_sailed = summary[summary["physical_status"] == "Not Yet Sailed"]
-    cannot_determine_no_detail = summary[summary["physical_status"] == "Cannot Determine (No Detail)"]
-    cannot_determine_no_eta = summary[summary["physical_status"] == "Cannot Determine (No ETA Data)"]
-    cannot_determine_total = len(cannot_determine_no_detail) + len(cannot_determine_no_eta)
+    on_water_c = consolidation[consolidation["physical_status"] == "On the Water"]
+    arrived_processing_c = consolidation[consolidation["physical_status"] == "Arrived, Processing"]
+    delivered_c = consolidation[consolidation["physical_status"] == "Delivered (At Branch)"]
+    not_yet_sailed_c = consolidation[consolidation["physical_status"] == "Not Yet Sailed"]
+    cannot_determine_c = consolidation[consolidation["physical_status"].str.startswith("Cannot Determine")]
 
     col1, col2, col3, col4, col5 = st.columns(5)
     with col1:
-        st.metric("🌊 On the Water", len(on_water_now))
+        st.metric("🌊 On the Water", len(on_water_c), help=f"{on_water_c['sipl_count'].sum()} SIPL bookings aboard")
     with col2:
-        st.metric("⚓ Arrived, Processing", len(arrived_processing))
+        st.metric("⚓ Arrived, Processing", len(arrived_processing_c), help=f"{arrived_processing_c['sipl_count'].sum()} SIPL bookings aboard")
     with col3:
-        st.metric("✅ Delivered", len(delivered))
+        st.metric("✅ Delivered", len(delivered_c), help=f"{delivered_c['sipl_count'].sum()} SIPL bookings aboard")
     with col4:
-        st.metric("Not Yet Sailed", len(not_yet_sailed))
+        st.metric("Not Yet Sailed", len(not_yet_sailed_c), help=f"{not_yet_sailed_c['sipl_count'].sum()} SIPL bookings")
     with col5:
-        st.metric("Cannot Determine", cannot_determine_total)
+        st.metric("Cannot Determine", len(cannot_determine_c), help=f"{cannot_determine_c['sipl_count'].sum()} SIPL bookings")
 
-    on_water_value = on_water_now["total_value"].sum()
-    all_in_transit_value = summary["total_value"].sum()
-    st.success(
-        f"**${on_water_value:,.0f}** of inventory value is genuinely on the water "
-        f"right now — still sailing, hasn't reached port yet. This is narrower "
-        f"than the full **${all_in_transit_value:,.0f}** in-transit total (which "
-        f"also includes shipments still awaiting booking, already at port "
-        f"clearing customs, already delivered, or with no date to judge)."
+    st.caption(
+        f"📌 **Containers**, not SIPLs — {len(consolidation)} containers total, carrying "
+        f"{consolidation['sipl_count'].sum()} SIPL bookings between them "
+        f"(avg {consolidation['sipl_count'].mean():.1f} per container). Hover a metric above "
+        "for its SIPL-booking count."
     )
 
-    if len(arrived_processing) > 0:
+    on_water_value = on_water_c["total_value"].sum()
+    all_in_transit_value = consolidation["total_value"].sum()
+    st.success(
+        f"**${on_water_value:,.0f}** of inventory value is genuinely on the water "
+        f"right now, across **{len(on_water_c)} containers** — still sailing, hasn't "
+        f"reached port yet. This is narrower than the full **${all_in_transit_value:,.0f}** "
+        f"in-transit total (which also includes containers still awaiting booking, "
+        f"already at port clearing customs, already delivered, or with no date to judge)."
+    )
+
+    if len(arrived_processing_c) > 0:
         st.warning(
-            f"**{len(arrived_processing)} shipments (${arrived_processing['total_value'].sum():,.0f})** "
+            f"**{len(arrived_processing_c)} containers (${arrived_processing_c['total_value'].sum():,.0f})** "
             "have passed their port ETA but aren't marked delivered yet — worth "
             "checking if these are moving through customs/drayage normally or stuck."
         )
 
-    with st.expander(f"See all {len(on_water_now)} shipments genuinely on the water"):
-        on_water_display = on_water_now[
-            ["sipl", "container", "supplier", "ship_b_l_date", "port_eta", "location_eta", "total_value", "sipl_status"]
+    mixed = consolidation[consolidation["has_mixed_status"]]
+    if len(mixed) > 0:
+        st.info(
+            f"ℹ️ **{len(mixed)} container(s)** have SIPLs that still disagree on status even "
+            "after sharing known dates across siblings — either genuine container reuse "
+            "across unrelated shipments, or conflicting dates recorded for the same voyage. "
+            "The status shown for these is from the most recently active SIPL; see the "
+            "detail table below for the full breakdown."
+        )
+        with st.expander(f"See the {len(mixed)} container(s) with disagreeing SIPL statuses"):
+            for _, row in mixed.iterrows():
+                st.markdown(f"**{row['container']}** — reported as *{row['physical_status']}* (most recent SIPL), {row['sipl_count']} SIPLs aboard:")
+                sibling_detail = summary[summary["container"] == row["container"]][
+                    ["sipl", "physical_status", "ship_b_l_date", "port_eta", "sipl_status"]
+                ]
+                st.dataframe(sibling_detail, use_container_width=True, hide_index=True)
+
+    with st.expander(f"See all {len(on_water_c)} containers genuinely on the water"):
+        on_water_display = on_water_c[
+            ["container", "sipl_count", "ship_b_l_date", "port_eta", "location_eta", "total_value"]
         ].rename(columns={"port_eta": "expected_port_arrival", "location_eta": "expected_branch_arrival"}).sort_values("expected_port_arrival")
         st.dataframe(on_water_display, use_container_width=True, hide_index=True)
 
-    with st.expander(f"See the {len(arrived_processing)} shipments arrived at port but not yet delivered"):
-        processing_display = arrived_processing[
-            ["sipl", "container", "supplier", "port_eta", "location_eta", "total_value", "sipl_status"]
+    with st.expander(f"See the {len(arrived_processing_c)} containers arrived at port but not yet delivered"):
+        processing_display = arrived_processing_c[
+            ["container", "sipl_count", "port_eta", "location_eta", "total_value"]
         ].rename(columns={"port_eta": "port_eta_was", "location_eta": "expected_branch_arrival"}).sort_values("port_eta_was")
         st.dataframe(processing_display, use_container_width=True, hide_index=True)
 
-    if cannot_determine_total > 0:
-        with st.expander(f"See the {cannot_determine_total} shipments with an unknown physical location"):
-            if len(cannot_determine_no_detail) > 0:
-                st.markdown(f"**{len(cannot_determine_no_detail)} — no inventory detail record** (no Bill of Lading date to check whether they've even sailed):")
+    if len(cannot_determine_c) > 0:
+        with st.expander(f"See the {len(cannot_determine_c)} containers with an unknown physical location"):
+            no_detail = cannot_determine_c[cannot_determine_c["physical_status"] == "Cannot Determine (No Detail)"]
+            no_eta = cannot_determine_c[cannot_determine_c["physical_status"] == "Cannot Determine (No ETA Data)"]
+            if len(no_detail) > 0:
+                st.markdown(f"**{len(no_detail)} — no inventory detail record for any SIPL aboard** (no Bill of Lading date to check whether they've even sailed):")
+                st.dataframe(no_detail[["container", "sipl_count"]], use_container_width=True, hide_index=True)
+            if len(no_eta) > 0:
+                st.markdown(f"**{len(no_eta)} — sailed, but no port or location ETA on file** (can't tell if arrived):")
                 st.dataframe(
-                    cannot_determine_no_detail[["sipl", "container", "supplier", "sipl_status"]],
-                    use_container_width=True, hide_index=True
-                )
-            if len(cannot_determine_no_eta) > 0:
-                st.markdown(f"**{len(cannot_determine_no_eta)} — sailed, but no port or location ETA on file** (can't tell if arrived):")
-                st.dataframe(
-                    cannot_determine_no_eta[["sipl", "container", "supplier", "ship_b_l_date", "total_value", "sipl_status"]],
+                    no_eta[["container", "sipl_count", "ship_b_l_date", "total_value"]],
                     use_container_width=True, hide_index=True
                 )
 
@@ -167,20 +236,23 @@ def render_tab():
     st.divider()
     st.markdown("### 🔴 Value at Risk: Demurrage Exposure by Dollars, Not Just Count")
 
-    value_no_lfd = summary[~summary["has_lfd"]]["total_value"].sum()
-    value_has_lfd = summary[summary["has_lfd"]]["total_value"].sum()
-    total_value = value_no_lfd + value_has_lfd
-    pct_at_risk = 100 * value_no_lfd / total_value if total_value > 0 else 0
+    value_no_lfd = consolidation[~consolidation["has_lfd"]]["total_value"].sum()
+    value_has_lfd = consolidation[consolidation["has_lfd"]]["total_value"].sum()
+    total_value_lfd = value_no_lfd + value_has_lfd
+    pct_at_risk = 100 * value_no_lfd / total_value_lfd if total_value_lfd > 0 else 0
+    containers_no_lfd = (~consolidation["has_lfd"]).sum()
 
     st.error(
         f"""
-        **${value_no_lfd:,.0f} of ${total_value:,.0f} total value
-        ({pct_at_risk:.0f}%) sits in shipments with no LFD (Last Free Day) on
-        file.**
+        **${value_no_lfd:,.0f} of ${total_value_lfd:,.0f} total value
+        ({pct_at_risk:.0f}%), across {containers_no_lfd} containers, sits in
+        shipments with no LFD (Last Free Day) on file.**
 
-        This is a sharper story than counting shipments alone: the
-        untracked-for-demurrage-risk shipments are disproportionately the
-        *high-value* ones, not a random cross-section.
+        This is a sharper story than counting containers alone: the
+        untracked-for-demurrage-risk containers are disproportionately the
+        *high-value* ones, not a random cross-section. (LFD is a port-side
+        deadline that applies to the whole physical container — reported
+        here per container, not duplicated once per SIPL aboard it.)
         """
     )
 
@@ -192,9 +264,9 @@ def render_tab():
         )
         st.plotly_chart(fig, use_container_width=True)
     with col2:
-        st.markdown("**Highest-value shipments with no LFD:**")
-        top_risk = summary[~summary["has_lfd"]].nlargest(10, "total_value")[
-            ["sipl", "container", "supplier", "total_value", "sipl_status"]
+        st.markdown("**Highest-value containers with no LFD:**")
+        top_risk = consolidation[~consolidation["has_lfd"]].nlargest(10, "total_value")[
+            ["container", "suppliers", "sipl_count", "total_value", "physical_status"]
         ]
         st.dataframe(top_risk, use_container_width=True, hide_index=True)
 
@@ -258,22 +330,22 @@ def render_tab():
     st.divider()
     st.markdown("### 🌍 Trade Lane Analysis")
 
-    st.markdown("Where shipments come from and where they're headed, by dollar value.")
+    st.markdown("Where containers come from and where they're headed, by dollar value.")
 
-    lane = detail.groupby(["departure_port", "ship_to"]).agg(
-        value=("total_cost", "sum"), shipments=("sipl", "nunique")
+    lane = consolidation.groupby(["departure_port", "ship_to_location"]).agg(
+        value=("total_value", "sum"), containers=("container", "nunique")
     ).sort_values("value", ascending=False).head(15).reset_index()
 
     st.dataframe(
-        lane.rename(columns={"departure_port": "From", "ship_to": "To",
-                              "value": "Total Value", "shipments": "# Shipments"}),
+        lane.rename(columns={"departure_port": "From", "ship_to_location": "To",
+                              "value": "Total Value", "containers": "# Containers"}),
         use_container_width=True, hide_index=True
     )
 
     top_lane = lane.iloc[0]
     st.markdown(
-        f"💡 **Top trade lane**: {top_lane['departure_port']} → {top_lane['ship_to']} "
-        f"— ${top_lane['value']:,.0f} across {top_lane['shipments']} shipments."
+        f"💡 **Top trade lane**: {top_lane['departure_port']} → {top_lane['ship_to_location']} "
+        f"— ${top_lane['value']:,.0f} across {top_lane['containers']} containers."
     )
 
     # =========================================================================
@@ -284,11 +356,12 @@ def render_tab():
 
     st.markdown(
         "Days between the Bill of Lading date (when cargo is loaded/shipped) "
-        "and the expected arrival date — a real measure of how long freight "
-        "actually takes by route."
+        "and the expected port arrival — one measurement per **container**, "
+        "not per product line, so a heavily-consolidated container doesn't "
+        "skew the average by counting itself many times over."
     )
 
-    valid_transit = detail[detail["transit_days"].notna() & ~detail["has_transit_anomaly"]]
+    valid_transit = consolidation[consolidation["transit_days"].notna() & ~consolidation["has_transit_anomaly"]]
 
     col1, col2 = st.columns(2)
     with col1:
@@ -314,17 +387,18 @@ def render_tab():
     st.divider()
     st.markdown("### ⚠️ Data Anomalies")
 
-    anomalies = detail[detail["has_transit_anomaly"]].drop_duplicates("sipl")
+    anomalies = consolidation[consolidation["has_transit_anomaly"]]
     if len(anomalies) > 0:
         st.warning(
             f"""
-            **{len(anomalies)} shipment(s) show an ETA date *before* the ship date**
+            **{len(anomalies)} container(s) show a port ETA *before* the ship date**
             — physically impossible (you can't arrive before you depart). Likely a
-            data entry error on one of the two dates, worth a quick check.
+            data entry error on one of the two dates, worth a quick check. Use the
+            container search above for the full per-SIPL breakdown.
             """
         )
         st.dataframe(
-            anomalies[["sipl", "container", "ship_b_l_date", "eta_date", "transit_days"]],
+            anomalies[["container", "ship_b_l_date", "port_eta", "transit_days"]],
             use_container_width=True, hide_index=True
         )
     else:
@@ -336,15 +410,25 @@ def render_tab():
     st.divider()
     st.markdown("### 📥 Download This Data")
 
-    if st.button("📊 Download Merged Shipment Data as CSV", key="shipment_export_btn"):
-        csv = detail.to_csv(index=False)
-        st.download_button(
-            label="Download CSV File", data=csv,
-            file_name=f"shipment_merged_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-            mime="text/csv", key="shipment_export_download"
-        )
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("📊 Download Container-Level Data as CSV", key="shipment_export_container_btn"):
+            csv = consolidation.to_csv(index=False)
+            st.download_button(
+                label="Download CSV File", data=csv,
+                file_name=f"container_summary_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                mime="text/csv", key="shipment_export_container_download"
+            )
+    with col2:
+        if st.button("📄 Download Full SIPL/Line-Item Detail as CSV", key="shipment_export_detail_btn"):
+            csv = detail.to_csv(index=False)
+            st.download_button(
+                label="Download CSV File", data=csv,
+                file_name=f"shipment_merged_detail_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                mime="text/csv", key="shipment_export_detail_download"
+            )
 
-    st.caption(f"Generated {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | {len(summary):,} shipments | {len(detail):,} merged line items")
+    st.caption(f"Generated {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | {len(consolidation):,} containers | {len(summary):,} SIPLs | {len(detail):,} merged line items")
 
 
 if __name__ == "__main__":

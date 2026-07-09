@@ -703,6 +703,9 @@ def build_container_ledger(bills_clean, gl_clean, start, end):
     awaiting_gl_count = (
         bills_window[~bills_window["is_matchable"]].groupby("container").size().rename("awaiting_gl_count")
     )
+    pending_amount = (
+        bills_window[~bills_window["is_matchable"]].groupby("container")["amount"].sum().rename("pending_amount")
+    )
     # Delimiter must NOT be a comma — 24% of real vendor names contain a
     # comma as part of their own legal name (e.g. "Department of HomeLand
     # Security, Bureau of Customs and Border Protection", "EWI, Inc."), so
@@ -728,13 +731,14 @@ def build_container_ledger(bills_clean, gl_clean, start, end):
     )
 
     container_ledger = pd.concat(
-        [total_billed, total_gl_confirmed, bill_count, gl_matched_count, awaiting_gl_count, vendor_list, notes_by_container],
+        [total_billed, total_gl_confirmed, bill_count, gl_matched_count, awaiting_gl_count, pending_amount, vendor_list, notes_by_container],
         axis=1,
     ).reset_index()
 
     container_ledger["total_gl_confirmed"] = container_ledger["total_gl_confirmed"].fillna(0)
     container_ledger["gl_matched_count"] = container_ledger["gl_matched_count"].fillna(0).astype(int)
     container_ledger["awaiting_gl_count"] = container_ledger["awaiting_gl_count"].fillna(0).astype(int)
+    container_ledger["pending_amount"] = container_ledger["pending_amount"].fillna(0)
     container_ledger["notes"] = container_ledger["notes"].fillna("")
     container_ledger["gl_coverage_pct"] = np.where(
         container_ledger["total_billed"] > 0,
@@ -1149,11 +1153,38 @@ def merge_sipl_inventory(sipl_clean, inventory_clean):
             that would repeat the same status-can't-be-trusted mistake this
             whole model exists to avoid). 'is_currently_on_water' is True
             only for the "On the Water" physical_status bucket.
-          - 'container_consolidation': one row per container, with # of
-            distinct SIPLs sharing it, total value, and a routing-
-            consistency flag (ship_to/arrival_port/departure_port nunique
-            across the container's rows — >1 means either legitimate reuse
-            across SIPLs, or worth a manual check).
+          - 'container_consolidation': one row per container (the grain to
+            report "on the water" style counts at — a container carrying
+            multiple SIPLs is one physical box, not N of them). Includes
+            sipl_count, total_value, is_routing_consistent (ship_to/
+            departure_port nunique <= 1 across the container's SIPLs — False
+            means genuine reuse across unrelated shipments at different
+            times), and container-level physical_status/ship_b_l_date/
+            port_eta/location_eta derived from sipl_summary AFTER date
+            propagation across routing-consistent containers' sibling SIPLs
+            (see the propagation step above sipl_summary's status
+            computation). has_mixed_status is True whenever a container's
+            sibling SIPLs still disagree on physical_status after
+            propagation — checked directly by comparing agreement, NOT
+            inferred from is_routing_consistent, because that flag only
+            checks ship_to/departure_port and does not guarantee sibling
+            SIPLs share the same ship_b_l_date/port_eta (confirmed: 2
+            containers are routing-consistent yet have genuinely conflicting
+            non-null dates a week+ apart, which propagation correctly leaves
+            unresolved rather than picking one). Whenever mixed,
+            physical_status reports the most-recently-active SIPL's status
+            as primary, flagged rather than silently picked. Also includes
+            has_lfd/lfd (propagated the same way as the other dates — LFD is
+            a port-side deadline that applies to the whole physical
+            container, not per-SIPL), ship_to_location/departure_port (first
+            non-null value — exact for routing-consistent containers), and
+            suppliers (" | "-joined list — multiple suppliers' goods can
+            legitimately share one consolidated container, not assumed to
+            be a single value), and transit_days/has_transit_anomaly
+            (ship_b_l_date -> port_eta, computed once per container from
+            the already-container-level fields above, not re-derived from
+            merged_detail's line-item eta_date which would count a
+            container once per product line it carries).
     """
     overlap_cols = ["container", "departure_port", "eta_date", "supplier"]
     merged_detail = inventory_clean.merge(
@@ -1184,8 +1215,42 @@ def merge_sipl_inventory(sipl_clean, inventory_clean):
     sipl_summary["item_count"] = sipl_summary["item_count"].fillna(0).astype(int)
     sipl_summary["has_detail"] = sipl_summary["item_count"] > 0
 
+    # Routing consistency per container (same ship_to/departure_port across
+    # every SIPL sharing it) — computed early because it gates whether dates
+    # are safe to propagate across sibling SIPLs below. A routing-consistent
+    # container is genuinely one voyage; a routing-inconsistent one is reuse
+    # across unrelated shipments at different times, and must NOT have dates
+    # shared across that boundary.
+    routing_check = sipl_clean.groupby("container").agg(
+        ship_to_nunique=("ship_to_location", lambda s: s.dropna().nunique()),
+        departure_port_nunique=("departure_port", lambda s: s.dropna().nunique()),
+    )
+    routing_check["is_routing_consistent"] = (
+        (routing_check["ship_to_nunique"] <= 1) & (routing_check["departure_port_nunique"] <= 1)
+    )
+    sipl_summary["is_routing_consistent"] = sipl_summary["container"].map(routing_check["is_routing_consistent"])
+
+    # Propagate known dates across sibling SIPLs sharing a routing-consistent
+    # container. Verified against real data: within a genuinely single-voyage
+    # container, sibling SIPLs share the same ship_b_l_date/port_eta/
+    # location_eta — but only SOME of a consolidated container's SIPL rows
+    # may have a matching Inventory Detail record to confirm those dates
+    # directly (ship_b_l_date only exists via that match). Confirmed example:
+    # a 30-SIPL Genoa-origin container where 17 SIPLs individually confirm
+    # ship_b_l_date=2026-07-01 / port_eta=2026-07-17 via their own Inventory
+    # Detail match, and the other 13 have no match at all — they're the same
+    # physical container on the same voyage, so the known dates apply to them
+    # too. Routing-inconsistent containers (reuse across unrelated shipments)
+    # are explicitly excluded from this fill.
+    consistent_mask = sipl_summary["is_routing_consistent"]
+    for col in ["ship_b_l_date", "port_eta", "location_eta", "lfd"]:
+        propagated = sipl_summary.loc[consistent_mask].groupby("container")[col].transform("min")
+        sipl_summary.loc[consistent_mask, col] = sipl_summary.loc[consistent_mask, col].fillna(propagated)
+    sipl_summary["has_lfd"] = sipl_summary["lfd"].notna()
+
     # Has this SIPL sailed at all? "Cannot Determine" is an honest third
-    # state for the 17 SIPLs with no inventory detail (no B/L date to check),
+    # state for SIPLs with no inventory detail — and, after the propagation
+    # above, no sibling on the same routing-consistent container either —
     # not folded into either "sailed" or "not sailed".
     def _sailing_status(row):
         if pd.isna(row["ship_b_l_date"]):
@@ -1227,14 +1292,24 @@ def merge_sipl_inventory(sipl_clean, inventory_clean):
     # avoid. Verified: 20 SIPLs have no port_eta (and, per the lockstep
     # finding above, no location_eta either).
     def _physical_status(row):
-        if row["sailing_status"] == "Cannot Determine (No Detail)":
-            return "Cannot Determine (No Detail)"
-        if row["sailing_status"] == "Not Yet Sailed":
-            return "Not Yet Sailed"
+        # Check definitive arrival signals FIRST, before the sailing check.
+        # "At branch" (or a passed location_eta) is unambiguous evidence the
+        # SIPL has arrived — and arrival implies it sailed — even if this
+        # specific SIPL row has no Inventory Detail match to confirm
+        # ship_b_l_date directly. Previously this ordering was reversed, so
+        # a SIPL with sipl_status=="At branch" but no inventory match was
+        # wrongly reported "Cannot Determine (No Detail)" instead of
+        # "Delivered (At Branch)" — confirmed real instances: SIPLs
+        # 159840C, 159842C, 159843C, each sharing a container with a
+        # sibling SIPL already confirmed "At branch" at an identical port_eta.
         if row["sipl_status"] == "At branch":
             return "Delivered (At Branch)"
         if pd.notna(row["location_eta"]) and row["location_eta"] < today:
             return "Delivered (At Branch)"
+        if row["sailing_status"] == "Cannot Determine (No Detail)":
+            return "Cannot Determine (No Detail)"
+        if row["sailing_status"] == "Not Yet Sailed":
+            return "Not Yet Sailed"
         if pd.isna(row["port_eta"]):
             return "Cannot Determine (No ETA Data)"
         return "Arrived, Processing" if row["port_eta"] < today else "On the Water"
@@ -1244,23 +1319,136 @@ def merge_sipl_inventory(sipl_clean, inventory_clean):
 
     # container_consolidation: grouped from sipl_clean (the full
     # container-tracked universe, 225 rows), not merged_detail, so
-    # containers with no inventory detail still appear.
-    consolidation = sipl_clean.groupby("container").agg(
-        sipl_count=("sipl", "nunique"),
-        ship_to_nunique=("ship_to_location", lambda s: s.dropna().nunique()),
-        departure_port_nunique=("departure_port", lambda s: s.dropna().nunique()),
-    ).reset_index()
+    # containers with no inventory detail still appear. Reuses routing_check
+    # computed above rather than recomputing ship_to/departure_port nunique.
+    consolidation = routing_check.reset_index()
+    consolidation["sipl_count"] = consolidation["container"].map(sipl_clean.groupby("container")["sipl"].nunique())
     consolidation = consolidation.merge(
         sipl_summary.groupby("container")["total_value"].sum().rename("total_value"),
         on="container", how="left"
     )
     consolidation["total_value"] = consolidation["total_value"].fillna(0)
-    consolidation["is_routing_consistent"] = (
-        (consolidation["ship_to_nunique"] <= 1) & (consolidation["departure_port_nunique"] <= 1)
+
+    # Container-level physical_status — the actual "on the water" count
+    # this dashboard should lead with (containers, not SIPL bookings).
+    # Agreement is VERIFIED per container, not assumed from
+    # is_routing_consistent — that flag only checks ship_to/departure_port
+    # match, which turned out NOT to guarantee sibling SIPLs share the same
+    # ship_b_l_date/port_eta. Confirmed against real data: 2 containers
+    # (MEDU5655981, MSDU8402053) are flagged is_routing_consistent=True
+    # (same ship_to/departure_port) yet have siblings with genuinely
+    # DIFFERENT non-null ship_b_l_date values a week+ apart — propagation
+    # correctly leaves these alone (fillna only fills missing values, never
+    # overwrites a real conflicting one), so their physical_status still
+    # legitimately disagrees after the fill. For any container where
+    # sibling SIPLs still disagree post-propagation — for this reason or
+    # genuine reuse — the most-recently-active SIPL's status is reported as
+    # primary and has_mixed_status is flagged explicitly, rather than
+    # silently picking one status without disclosure.
+    def _container_status(container_id):
+        rows = sipl_summary[sipl_summary["container"] == container_id]
+        if rows["physical_status"].nunique() == 1:
+            return rows["physical_status"].iloc[0], False
+        most_recent = rows.sort_values("ship_b_l_date", ascending=False, na_position="last").iloc[0]
+        return most_recent["physical_status"], True
+
+    status_results = consolidation["container"].apply(_container_status)
+    consolidation["physical_status"] = status_results.apply(lambda x: x[0])
+    consolidation["has_mixed_status"] = status_results.apply(lambda x: x[1])
+
+    # Container's own (propagated) dates, LFD, and location fields, for
+    # direct container-level display without re-deriving from sipl_summary
+    # every time a dashboard view needs them. ship_to_location and
+    # departure_port take the first non-null value per container — exact
+    # for routing-consistent containers (nunique <= 1 by definition), a
+    # "primary" pick for the rare inconsistent one (same treatment as
+    # physical_status's most-recent-wins rule, consistent within this file).
+    consolidation = consolidation.merge(
+        sipl_summary.groupby("container").agg(
+            ship_b_l_date=("ship_b_l_date", "min"),
+            port_eta=("port_eta", "min"),
+            location_eta=("location_eta", "min"),
+            lfd=("lfd", "min"),
+            ship_to_location=("ship_to_location", "first"),
+            departure_port=("departure_port", "first"),
+        ),
+        on="container", how="left"
     )
+    consolidation["has_lfd"] = consolidation["lfd"].notna()
+
+    # Vendors/suppliers aboard a container can legitimately differ even for
+    # a single, routing-consistent voyage (multiple suppliers' goods
+    # consolidated into one container) — reported as a delimiter-joined list
+    # (" | ", not ",": confirmed in the Bills/GL work that vendor names
+    # themselves can contain commas), not assumed to be one value.
+    consolidation = consolidation.merge(
+        sipl_summary.groupby("container")["supplier"]
+        .apply(lambda s: " | ".join(sorted(set(s.dropna().astype(str)))))
+        .rename("suppliers"),
+        on="container", how="left"
+    )
+
+    # Container-level transit time: ship_b_l_date -> port_eta (both already
+    # container-level, propagated fields above) — NOT re-derived from
+    # merged_detail's line-item eta_date, which would count a container once
+    # per product line it carries instead of once. has_transit_anomaly flags
+    # a negative value (port_eta before ship_b_l_date — always a data error,
+    # never a real transit time).
+    consolidation["transit_days"] = (consolidation["port_eta"] - consolidation["ship_b_l_date"]).dt.days
+    consolidation["has_transit_anomaly"] = consolidation["transit_days"] < 0
+    consolidation["departure_country"] = extract_country_from_port(consolidation["departure_port"])
 
     return {
         "merged_detail": merged_detail,
         "sipl_summary": sipl_summary,
         "container_consolidation": consolidation,
+    }
+
+
+def get_shipment_container_detail(container_id, sipl_summary, container_consolidation):
+    """
+    Look up full detail for a single container within the SIPL tracking +
+    Inventory Detail merge — the container-level lookup for
+    shipment_insights.py, matching the same shape/spirit as
+    get_container_detail() (the Bills+GL container search) elsewhere in
+    this file.
+
+    Args:
+        container_id: exact container ID to look up (caller should
+                       uppercase/strip user input first)
+        sipl_summary: merge_sipl_inventory()['sipl_summary']
+        container_consolidation: merge_sipl_inventory()['container_consolidation']
+
+    Returns:
+        dict with keys:
+          - 'found': bool
+          - 'physical_status', 'has_mixed_status', 'sipl_count', 'total_value',
+            'is_routing_consistent', 'ship_b_l_date', 'port_eta', 'location_eta'
+            — the container-level fields from container_consolidation
+          - 'sipls': DataFrame, one row per SIPL aboard this container
+            (drill-down detail — physical_status, dates, value, sipl_status,
+            supplier, ship_to per SIPL), sorted most-recently-active first
+    """
+    container_row = container_consolidation[container_consolidation["container"] == container_id]
+    if len(container_row) == 0:
+        return {"found": False, "container": container_id}
+
+    row = container_row.iloc[0]
+    sipls = sipl_summary[sipl_summary["container"] == container_id][
+        ["sipl", "physical_status", "ship_b_l_date", "port_eta", "location_eta",
+         "total_value", "sipl_status", "supplier", "ship_to_location"]
+    ].sort_values("ship_b_l_date", ascending=False, na_position="last")
+
+    return {
+        "found": True,
+        "container": container_id,
+        "physical_status": row["physical_status"],
+        "has_mixed_status": bool(row["has_mixed_status"]),
+        "sipl_count": int(row["sipl_count"]),
+        "total_value": row["total_value"],
+        "is_routing_consistent": bool(row["is_routing_consistent"]),
+        "ship_b_l_date": row["ship_b_l_date"],
+        "port_eta": row["port_eta"],
+        "location_eta": row["location_eta"],
+        "sipls": sipls,
     }
