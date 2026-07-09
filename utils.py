@@ -896,11 +896,14 @@ def get_container_detail(container_id, bills_clean, gl_clean, year=None):
 # IN-TRANSIT LIST BY SIPL — CLEANING PIPELINE
 # =============================================================================
 # Single source of truth for cleaning "In-Transit List by SIPL.xls", shared
-# by in_transit_insights.py. This file's grain is one row per SIPL (the
-# operational status board), unlike Bills.xls where a missing container
-# makes a row useless — here the row's value IS the SIPL/status/ETA
-# tracking regardless of whether a container resolves, so rows are never
-# dropped for a missing/unresolved container, only flagged.
+# by in_transit_insights.py. Scope is deliberately restricted to genuine
+# ocean-container freight: confirmed against real data that the ~73% of
+# rows with no resolvable ISO container are overwhelmingly domestic
+# trucking/parcel tracking numbers (TRUCK FEDEXGRND, TRUCK UPS, TRUCK XPO,
+# TRUCK DAYLIGHT, TRUCK R&L, TRUCK TFORCE, etc. — zero AWB/air-freight
+# numbers found in this file), not international freight worth tracking
+# for this purpose. Per explicit direction: rows without a valid container
+# number are dropped, not merely flagged — domestic data is out of scope.
 
 _INITIATED_ON_DATE = re.compile(r"(\d{1,2}/\d{1,2}/\d{4})")
 
@@ -908,7 +911,10 @@ _INITIATED_ON_DATE = re.compile(r"(\d{1,2}/\d{1,2}/\d{4})")
 def clean_in_transit_dataframe(raw):
     """
     Clean a raw "In-Transit List by SIPL.xls" DataFrame (already loaded via
-    load_html_table).
+    load_html_table), restricted to rows with a valid ISO 6346 ocean
+    container number. Domestic/parcel-tracked rows (no container) are
+    dropped — confirmed this is ~73% of the file and is not the container
+    freight this dashboard is scoped to track.
 
     Returns:
         (df_clean, original_count, final_count)
@@ -928,15 +934,17 @@ def clean_in_transit_dataframe(raw):
 
     # Container field mixes real ISO codes with truck/parcel tracking
     # numbers, same noisy shape as Bills.xls — reuse clean_container() as-is.
-    # Flagged, not dropped: this row's value is the SIPL/status tracking
-    # itself, independent of whether the shipment happens to be
-    # containerized.
     df["container"] = df["container"].apply(lambda x: clean_container(x, keep_air_freight_marker=True))
-    df["has_real_container"] = (
+
+    # Drop domestic/unresolvable rows. Generic "AIR FREIGHT" and AWB-style
+    # entries are dropped too — confirmed zero AWB matches in this file, so
+    # this is purely a defensive/consistency measure with Bills.xls, not
+    # something expected to remove real international-air rows here.
+    df = df[
         df["container"].notna()
         & (df["container"] != "AIR FREIGHT")
         & (~df["container"].astype(str).str.startswith("AWB "))
-    )
+    ]
 
     for col in ["port_eta", "rail_eta", "location_eta", "eta_date", "lfd"]:
         if col in df.columns:
@@ -970,17 +978,25 @@ def clean_in_transit_dataframe(raw):
 # INVENTORY IN TRANSIT - DETAIL — CLEANING PIPELINE
 # =============================================================================
 # Single source of truth for cleaning "Inventory In Transit - Detail.xls",
-# shared by inventory_detail_insights.py. Same "flag, don't drop" stance on
-# unresolved containers as clean_in_transit_dataframe() — this file's grain
-# is one row per product line, and product/value visibility doesn't depend
-# on a container having resolved (confirmed: Sample-type lines are almost
-# never containerized by nature, not by data-quality failure).
+# shared by inventory_detail_insights.py. Same container-required scope as
+# clean_in_transit_dataframe(): confirmed against real data that the ~55%
+# of rows with no resolvable ISO container are overwhelmingly domestic
+# parcel tracking (UPS#..., FedEX#..., TARGET EXPRESS — zero AWB/air-freight
+# numbers found in this file either), and that restricting to real-container
+# rows keeps 95.5% of total dollar value ($5.19M of $5.44M) while dropping
+# 55% of row count — the domestic/parcel rows are overwhelmingly low-value
+# "Sample" line items, not meaningful freight being lost. Per explicit
+# direction: rows without a valid container number are dropped, not merely
+# flagged.
 
 def clean_inventory_detail_dataframe(raw):
     """
     Clean a raw "Inventory In Transit - Detail.xls" DataFrame (already
     loaded via load_html_table — which itself now strips the "REPORT
-    TOTALS" footer row this export includes).
+    TOTALS" footer row this export includes), restricted to rows with a
+    valid ISO 6346 ocean container number. Domestic/parcel-tracked rows
+    (no container) are dropped — confirmed this is ~55% of rows but only
+    ~4.5% of total dollar value.
 
     Returns:
         (df_clean, original_count, final_count)
@@ -995,11 +1011,14 @@ def clean_inventory_detail_dataframe(raw):
     df = df[df["sipl"].notna() & (df["sipl"].astype(str).str.strip() != "")]
 
     df["container"] = df["container"].apply(lambda x: clean_container(x, keep_air_freight_marker=True))
-    df["has_real_container"] = (
+
+    # Drop domestic/unresolvable rows (see module note above for the
+    # verified 95.5%-of-value-retained rationale).
+    df = df[
         df["container"].notna()
         & (df["container"] != "AIR FREIGHT")
         & (~df["container"].astype(str).str.startswith("AWB "))
-    )
+    ]
 
     for col in ["unit_cost", "total_cost"]:
         if col in df.columns:

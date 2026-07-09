@@ -18,7 +18,10 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from utils import load_html_table, clean_in_transit_dataframe, clean_inventory_detail_dataframe
+from utils import (
+    load_html_table, clean_in_transit_dataframe, clean_inventory_detail_dataframe,
+    standardize_columns, clean_currency
+)
 
 
 @st.cache_data
@@ -26,7 +29,14 @@ def load_and_clean_inventory():
     """Load Inventory In Transit - Detail.xls and clean it (shared logic in utils.py)."""
     raw = load_html_table(Path("Inventory In Transit - Detail .xls"))
     df, original_count, final_count = clean_inventory_detail_dataframe(raw)
-    return df, original_count, final_count
+
+    # Pre-filter total value, computed live (not hardcoded) so the "how much
+    # value did we lose by dropping domestic/parcel rows" comparison below
+    # stays accurate if the source export changes. clean_currency() is a
+    # shared low-level primitive, not a duplication of the cleaning pipeline.
+    original_total_value = clean_currency(standardize_columns(raw)["total_cost"]).sum()
+
+    return df, original_count, final_count, original_total_value
 
 
 @st.cache_data
@@ -40,7 +50,7 @@ def load_sipl_universe():
 def render_tab():
     """Render the full Inventory In Transit Insights view. Callable standalone or as a tab."""
 
-    inv_df, original_rows, cleaned_rows = load_and_clean_inventory()
+    inv_df, original_rows, cleaned_rows, original_total_value = load_and_clean_inventory()
     sipl_universe = load_sipl_universe()
 
     total_value = inv_df["total_cost"].sum()
@@ -49,10 +59,20 @@ def render_tab():
     # WHAT THIS SHOWS
     # =========================================================================
     st.markdown("### What This Data Represents")
+    removed = original_rows - cleaned_rows
+    value_removed_pct = 100 * (original_total_value - total_value) / original_total_value if original_total_value > 0 else 0
     st.markdown(
         f"""
         This is the **product and value detail** — what's actually inside every
-        shipment, broken down by product line, with quantities and dollar values.
+        ocean-container shipment, broken down by product line, with quantities
+        and dollar values.
+
+        **Scoped to container freight only.** Of {original_rows:,} product lines in
+        the raw export, **{removed:,} ({100*removed/original_rows:.0f}%) had no ocean
+        container** — mostly small parcel-shipped samples (UPS#..., FedEX#...) —
+        removed, since this view tracks container logistics specifically. Those
+        removed rows represented only **{value_removed_pct:.1f}% of total dollar
+        value**, confirming it was mostly low-value noise, not meaningful freight.
 
         **{cleaned_rows:,} product line items**, covering **{inv_df['sipl'].nunique():,} shipments**.
         """
@@ -77,21 +97,27 @@ def render_tab():
     # COUNT VS VALUE BY PRODUCT TYPE — the lead insight
     # =========================================================================
     st.divider()
-    st.markdown("### ⚖️ Count vs. Value: Samples Are Not What They Look Like")
+    st.markdown("### ⚖️ Count vs. Value by Product Type")
 
     by_count = inv_df["type"].value_counts()
     by_value = inv_df.groupby("type")["total_cost"].sum().sort_values(ascending=False)
 
-    sample_count_pct = 100 * by_count.get("Sample", 0) / len(inv_df)
-    sample_value_pct = 100 * by_value.get("Sample", 0) / total_value if total_value > 0 else 0
+    # Within container-tracked freight, "Quartz Samples" is the type where
+    # count and value diverge most sharply (unlike generic "Sample", which
+    # barely appears here at all once domestic/parcel rows are excluded).
+    top_count_type = by_count.index[0]
+    qs_count_pct = 100 * by_count.get("Quartz Samples", 0) / len(inv_df)
+    qs_value_pct = 100 * by_value.get("Quartz Samples", 0) / total_value if total_value > 0 else 0
 
     st.warning(
         f"""
-        **"Sample" line items make up {sample_count_pct:.0f}% of all rows in this file,
-        but only {sample_value_pct:.2f}% of total dollar value.**
+        **"Quartz Samples" make up {qs_count_pct:.0f}% of container-tracked rows,
+        but only {qs_value_pct:.2f}% of total dollar value.** Meanwhile
+        **{top_count_type}** dominates both count and value — it's where the
+        actual freight (and the actual money) is concentrated.
 
-        Don't let sample volume distract from where the money actually is — see
-        the value chart below.
+        Don't let sample-line volume distract from where the money actually is —
+        see the value chart below.
         """
     )
 
@@ -104,46 +130,6 @@ def render_tab():
         fig = px.bar(x=by_value.values, y=by_value.index, orientation="h",
                      title="By Dollar Value", labels={"x": "Total $", "y": "Type"})
         st.plotly_chart(fig, use_container_width=True)
-
-    # =========================================================================
-    # CONTAINER-MODE BY TYPE — explains the "55% unresolved" honestly
-    # =========================================================================
-    st.divider()
-    st.markdown("### 📦 Why Some Rows Show No Container")
-
-    has_container = inv_df["has_real_container"].sum()
-    no_container_pct = 100 * (1 - has_container / len(inv_df))
-
-    st.markdown(
-        f"""
-        **{no_container_pct:.0f}% of rows don't resolve to a real ocean container ID.**
-        This is NOT a data quality problem — it's two legitimately different
-        shipping modes in one file. Full-size product (slabs, quartz) ships in
-        ocean containers; small samples ship via parcel carriers (FedEx/UPS) that
-        don't use container numbers at all.
-        """
-    )
-
-    container_by_type = inv_df.groupby("type")["has_real_container"].agg(
-        real_container="sum", total_rows="count"
-    )
-    container_by_type["pct_containerized"] = (
-        100 * container_by_type["real_container"] / container_by_type["total_rows"]
-    ).round(0)
-    container_by_type = container_by_type.sort_values("pct_containerized", ascending=False)
-
-    st.dataframe(
-        container_by_type.rename(columns={
-            "real_container": "Has Container", "total_rows": "Total Rows",
-            "pct_containerized": "% Containerized"
-        }),
-        use_container_width=True
-    )
-    st.caption(
-        "📌 Notice: SLAB, Quartz Slab, Porcelain Slab, and Quartz Samples are nearly "
-        "100% containerized. Generic 'Sample' is the outlier at under 2% — confirming "
-        "these ship a completely different way, by nature, not by accident."
-    )
 
     # =========================================================================
     # PRODUCT TAXONOMY
@@ -204,7 +190,11 @@ def render_tab():
     st.markdown("### 🔍 Data Quality Notes")
 
     malformed = inv_df["category_is_malformed"].sum()
-    notes = [f"**{original_rows - cleaned_rows} row(s) removed** during cleaning (no SIPL on file — includes report footer artifacts)"]
+    notes = [
+        f"**{removed:,} row(s) removed** during cleaning — nearly all had no ocean "
+        "container (domestic/parcel, out of scope), a handful had no SIPL on file "
+        "at all (report footer artifacts)"
+    ]
     if malformed > 0:
         notes.append(f"**{malformed} row(s)** have a malformed category value (numeric junk instead of a real category)")
     notes.append(

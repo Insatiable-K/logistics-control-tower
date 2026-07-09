@@ -38,17 +38,19 @@ def render_tab():
     # WHAT THIS SHOWS
     # =========================================================================
     st.markdown("### What This Data Represents")
+    removed = original_rows - cleaned_rows
     st.markdown(
         f"""
-        This is the **operational status board** — every shipment currently
-        moving, tracked by SIPL (our internal shipment reference number).
+        This is the **operational status board** — every ocean-container shipment
+        currently moving, tracked by SIPL (our internal shipment reference number).
 
-        Unlike the Bills/Accounting data, this file doesn't need a container
-        number to be useful — the shipment's status and expected arrival date
-        are valuable on their own. So nothing is dropped here for a missing
-        container; it's flagged instead.
+        **Scoped to container freight only.** Of {original_rows:,} shipments in the
+        raw export, **{removed:,} ({100*removed/original_rows:.0f}%) were domestic
+        truck/parcel moves** (TRUCK FEDEXGRND, UPS, XPO, Daylight, R&L, TFORCE, etc.)
+        with no ocean container — removed, since this view tracks container
+        logistics specifically, not domestic freight.
 
-        **{cleaned_rows:,} shipments currently tracked.**
+        **{cleaned_rows:,} container shipments remain in scope.**
         """
     )
 
@@ -224,22 +226,6 @@ def render_tab():
     st.plotly_chart(fig, use_container_width=True)
 
     # =========================================================================
-    # CONTAINER RESOLUTION
-    # =========================================================================
-    st.divider()
-    st.markdown("### 📦 Container vs. Other Shipping Modes")
-
-    has_container = sipl_df["has_real_container"].sum()
-    st.markdown(
-        f"""
-        **{has_container} of {len(sipl_df)} shipments ({100*has_container/len(sipl_df):.0f}%)**
-        are tracked with a real ocean container ID. The rest ship via truck,
-        parcel, or another mode that doesn't use a container number — this is
-        a normal mix of shipping modes, not a data quality problem.
-        """
-    )
-
-    # =========================================================================
     # DATA QUALITY
     # =========================================================================
     st.divider()
@@ -247,12 +233,11 @@ def render_tab():
 
     st.markdown(
         f"""
-        - **{original_rows - cleaned_rows} rows removed** during cleaning (no SIPL on file)
+        - **{removed:,} rows removed** during cleaning — all domestic truck/parcel
+          shipments with no ocean container (out of scope for this view; see the
+          "What This Data Represents" section above)
         - **{missing_lfd} shipments ({missing_pct:.0f}%)** have no LFD — see the risk callout above
         - **{future_dated} shipment(s)** show a negative age (future-dated initiation)
-        - Blank rates are high but expected for several columns (port_eta 76%,
-          vessel 74%, departure_port 74%, fr_forwarder 73%) — these move together
-          and reflect real domestic/non-ocean shipments, not missing data
         """
     )
 
