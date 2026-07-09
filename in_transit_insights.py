@@ -68,26 +68,86 @@ def render_tab():
         """
     )
 
-    funnel_order = ["SIPL Ready", "Documents Sent", "Need Documents", "D.Os  Received",
-                     "At branch", "Scheduled for Delivery", "On Hold"]
+    # Correct pipeline order and plain-English meaning, as explained directly
+    # by the ops team (not guessed from the label text — see the
+    # sipl-status-definitions memory for the full source explanation).
+    PIPELINE_ORDER = ["Need Documents", "SIPL Ready", "Documents Sent",
+                       "D.Os  Received", "Scheduled for Delivery", "At branch"]
+    STAGE_DESCRIPTIONS = {
+        "Need Documents": "Not yet ready to ship — waiting on the packing list and commercial invoice from the supplier.",
+        "SIPL Ready": "Ready to sail with all documents in order, OR already sailed — this single status covers both states (see note below).",
+        "Documents Sent": "Documents sent to the CHA (customs broker) to clear customs — awaiting the Delivery Order (D.O.) back.",
+        "D.Os  Received": "Delivery Order received — branch and drayage vendor notified to schedule delivery.",
+        "Scheduled for Delivery": "Branch and drayage driver have confirmed a delivery date for the container.",
+        "At branch": "Container has arrived at the branch — successful end of the pipeline.",
+    }
+    # Exception/risk states — flags, not linear pipeline stages.
+    EXCEPTION_STATES = ["On Hold", "Damaged", "On Exam", "Freight Invoice Needed"]
+    EXCEPTION_DESCRIPTIONS = {
+        "On Hold": "Container is on hold at port; reason not yet known.",
+        "Damaged": "Container was damaged in transit and is being processed/claimed.",
+        "On Exam": "Container is being held at port for a customs inspection.",
+        "Freight Invoice Needed": "Invoice team hasn't linked a bill to this container yet — an internal delay, not a carrier/customs one.",
+    }
+
     status_counts = sipl_df["sipl_status"].value_counts()
-    ordered = [s for s in funnel_order if s in status_counts.index]
-    ordered += [s for s in status_counts.index if s not in ordered]
-    status_counts = status_counts.reindex(ordered)
+    # Zero-filled (not dropna'd) — a stage showing 0 here is a real, worth-
+    # reporting finding (e.g. "Need Documents" never has a container yet in
+    # this data), not something to silently omit from the chart.
+    pipeline_counts = status_counts.reindex(PIPELINE_ORDER).fillna(0).astype(int)
+    exception_counts = status_counts.reindex(EXCEPTION_STATES).dropna().astype(int)
+    other_labels = [s for s in status_counts.index if s not in PIPELINE_ORDER and s not in EXCEPTION_STATES]
+    other_counts = status_counts.reindex(other_labels).dropna().astype(int) if other_labels else pd.Series(dtype=int)
+
+    if pipeline_counts.get("Need Documents", 0) == 0:
+        st.caption(
+            "📌 \"Need Documents\" shows 0 here because this view is scoped to "
+            "container-tracked shipments only — checked the raw data directly: "
+            "every shipment currently at this stage is a domestic truck move "
+            "with no container yet assigned, not a data gap."
+        )
 
     col1, col2 = st.columns([2, 1])
     with col1:
         fig = px.bar(
-            x=status_counts.values, y=status_counts.index, orientation="h",
-            title="Shipments by Pipeline Stage",
+            x=pipeline_counts.values, y=pipeline_counts.index, orientation="h",
+            title="Shipments by Pipeline Stage (in process order)",
             labels={"x": "# Shipments", "y": "Stage"}
         )
+        fig.update_yaxes(categoryorder="array", categoryarray=list(reversed(PIPELINE_ORDER)))
         st.plotly_chart(fig, use_container_width=True)
     with col2:
-        st.markdown("**Stage counts:**")
-        for stage, count in status_counts.items():
+        st.markdown("**Pipeline stage counts:**")
+        for stage in PIPELINE_ORDER:
+            count = int(pipeline_counts.get(stage, 0))
             pct = 100 * count / len(sipl_df)
             st.write(f"- **{stage}**: {count} ({pct:.0f}%)")
+            st.caption(STAGE_DESCRIPTIONS[stage])
+
+    st.info(
+        "ℹ️ **\"SIPL Ready\" note**: this one status label actually covers two "
+        "different real states — ready to sail (not yet departed) and already "
+        "sailed / in transit. The data doesn't currently split these cleanly; "
+        "until that's resolved, treat the 723-shipment (or however many show "
+        "today) SIPL Ready count as a mix of both, not a single stage."
+    )
+
+    if len(exception_counts) > 0 or len(EXCEPTION_STATES) > 0:
+        st.markdown("**⚠️ Exception / risk states** (not part of the linear pipeline):")
+        any_exceptions = False
+        for stage in EXCEPTION_STATES:
+            count = int(exception_counts.get(stage, 0))
+            if count > 0:
+                any_exceptions = True
+                st.write(f"- **{stage}**: {count}")
+                st.caption(EXCEPTION_DESCRIPTIONS[stage])
+        if not any_exceptions:
+            st.write("None of these currently active in this window.")
+
+    if len(other_counts) > 0:
+        st.markdown("**Other / unrecognized statuses:**")
+        for stage, count in other_counts.items():
+            st.write(f"- **{stage}**: {count}")
 
     st.markdown("**Coarse status (2-value summary):**")
     coarse = sipl_df["status"].value_counts()
