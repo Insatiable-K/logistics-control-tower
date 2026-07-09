@@ -70,7 +70,8 @@ def load_and_clean_bills():
     )
     bills["is_air_freight"] = bills["container_clean"] == "AIR FREIGHT"
 
-    bills = bills.rename(columns={"container_clean": "container"})
+    # Drop the original noisy container column, promote the cleaned one
+    bills = bills.drop(columns=["container"]).rename(columns={"container_clean": "container"})
     final_count = len(bills)
     retention = 100 * final_count / original_count
 
@@ -79,12 +80,35 @@ def load_and_clean_bills():
 
 bills, original_rows, cleaned_rows, retention_pct = load_and_clean_bills()
 
+# Debug: check what we got
+if bills is None or len(bills) == 0:
+    st.error("Error: No data loaded. Check Bills.xls file.")
+    st.stop()
+
+# Ensure container column exists
+if 'container' not in bills.columns:
+    st.error(f"Error: 'container' column not found. Available columns: {list(bills.columns)}")
+    st.stop()
+
 # =============================================================================
 # TOP SUMMARY
 # =============================================================================
 st.markdown("### What This Data Represents")
-total_containers = int(bills['container'].nunique())
-total_amount = bills['amount'].sum()
+
+# Safely get counts
+try:
+    total_containers = bills['container'].nunique()
+    if pd.isna(total_containers):
+        total_containers = 0
+    else:
+        total_containers = int(total_containers)
+except:
+    total_containers = 0
+
+try:
+    total_amount = float(bills['amount'].sum())
+except:
+    total_amount = 0
 
 st.markdown(
     f"""
@@ -107,26 +131,32 @@ st.divider()
 st.markdown("### 💰 Money Summary")
 
 col1, col2, col3, col4 = st.columns(4)
+
+# Safely calculate metrics
+total_billed = bills['amount'].sum() if 'amount' in bills.columns else 0
+avg_bill = bills['amount'].mean() if 'amount' in bills.columns else 0
+still_owed = bills['balance_due'].sum() if 'balance_due' in bills.columns else 0
+pct_owed = (100 * still_owed / total_billed) if total_billed > 0 and 'balance_due' in bills.columns else 0
+
 with col1:
     st.metric(
         "Total Billed",
-        f"${bills['amount'].sum():,.0f}",
+        f"${total_billed:,.0f}",
         help="Total amount of all bills"
     )
 with col2:
     st.metric(
         "Average Bill",
-        f"${bills['amount'].mean():,.0f}",
+        f"${avg_bill:,.0f}",
         help="Average cost per bill"
     )
 with col3:
     st.metric(
         "Still Owed",
-        f"${bills['balance_due'].sum():,.0f}" if "balance_due" in bills.columns else "N/A",
+        f"${still_owed:,.0f}",
         help="Amount still unpaid to vendors"
     )
 with col4:
-    pct_owed = 100 * bills['balance_due'].sum() / bills['amount'].sum() if "balance_due" in bills.columns else 0
     st.metric(
         "% Unpaid",
         f"{pct_owed:.0f}%",
@@ -146,9 +176,15 @@ st.markdown(
 
 col1, col2 = st.columns(2)
 
+vendor_col = "non_inventory_vendor" if "non_inventory_vendor" in bills.columns else None
+
 with col1:
     st.markdown("**Top Vendors by Number of Bills**")
-    top_vendors_count = bills["non_inventory_vendor"].value_counts().head(10) if "non_inventory_vendor" in bills.columns else pd.Series()
+    if vendor_col and vendor_col in bills.columns:
+        top_vendors_count = bills[vendor_col].value_counts().head(10)
+    else:
+        top_vendors_count = pd.Series()
+
     if len(top_vendors_count) > 0:
         fig = px.bar(
             x=top_vendors_count.values,
@@ -163,7 +199,11 @@ with col1:
 
 with col2:
     st.markdown("**Top Vendors by Total Money Spent**")
-    top_vendors_amount = bills.groupby("non_inventory_vendor")["amount"].sum().nlargest(10) if "non_inventory_vendor" in bills.columns else pd.Series()
+    if vendor_col and vendor_col in bills.columns and 'amount' in bills.columns:
+        top_vendors_amount = bills.groupby(vendor_col)["amount"].sum().nlargest(10)
+    else:
+        top_vendors_amount = pd.Series()
+
     if len(top_vendors_amount) > 0:
         fig = px.bar(
             x=top_vendors_amount.values,
@@ -184,9 +224,14 @@ st.markdown("### ⚠️ Issues to Review")
 
 col1, col2 = st.columns(2)
 
+# Safely count pending and junk bills
+pending = bills["is_pending_literal"].sum() if "is_pending_literal" in bills.columns else 0
+pending_amount = bills[bills["is_pending_literal"]]["amount"].sum() if "is_pending_literal" in bills.columns and "amount" in bills.columns else 0
+
+junk = bills["is_placeholder_junk"].sum() if "is_placeholder_junk" in bills.columns else 0
+junk_amount = bills[bills["is_placeholder_junk"]]["amount"].sum() if "is_placeholder_junk" in bills.columns and "amount" in bills.columns else 0
+
 with col1:
-    pending = bills["is_pending_literal"].sum()
-    pending_amount = bills[bills["is_pending_literal"]]["amount"].sum()
     st.markdown(f"### 🟡 Waiting for Invoices")
     st.markdown(
         f"""
@@ -204,8 +249,6 @@ with col1:
             st.dataframe(pending_df, use_container_width=True, hide_index=True)
 
 with col2:
-    junk = bills["is_placeholder_junk"].sum()
-    junk_amount = bills[bills["is_placeholder_junk"]]["amount"].sum()
     st.markdown(f"### 🔴 Suspicious Invoice Numbers")
     st.markdown(
         f"""
@@ -235,8 +278,8 @@ if zero > 0:
 st.divider()
 st.markdown("### ✈️ Air Freight (Shipments Without Containers)")
 
-air_count = bills["is_air_freight"].sum()
-air_amount = bills[bills["is_air_freight"]]["amount"].sum()
+air_count = bills["is_air_freight"].sum() if "is_air_freight" in bills.columns else 0
+air_amount = bills[bills["is_air_freight"]]["amount"].sum() if "is_air_freight" in bills.columns and "amount" in bills.columns else 0
 
 st.markdown(
     f"""
@@ -259,10 +302,17 @@ if air_count > 0 and "non_inventory_vendor" in bills.columns:
 st.divider()
 st.markdown("### 📦 Container Patterns")
 
+if 'container' in bills.columns:
+    unique_containers = bills['container'].nunique()
+    avg_bills_per_container = bills['container'].value_counts().mean() if len(bills) > 0 else 0
+else:
+    unique_containers = 0
+    avg_bills_per_container = 0
+
 st.markdown(
     f"""
-    **{bills['container'].nunique():,} unique containers**
-    **Average {bills['container'].value_counts().mean():.0f} bills per container**
+    **{unique_containers:,} unique containers**
+    **Average {avg_bills_per_container:.0f} bills per container**
 
     💡 Why multiple bills per container? Each container gets separate bills for:
     - Ocean freight (carrying the container across the ocean)
@@ -274,7 +324,7 @@ st.markdown(
 )
 
 # Container prefix distribution
-containerized = bills[~bills["is_air_freight"]]
+containerized = bills[~bills["is_air_freight"]].copy()
 containerized["prefix"] = containerized["container"].str[:4]
 prefix_dist = containerized["prefix"].value_counts().head(15)
 

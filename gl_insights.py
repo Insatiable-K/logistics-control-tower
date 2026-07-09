@@ -46,7 +46,7 @@ def load_and_clean_gl():
     gl = pd.concat([gl_1275, gl_1313], ignore_index=True)
 
     # Clean
-    for col in ["debit", "credit"]:
+    for col in ["debit", "credit", "balance"]:
         if col in gl.columns:
             gl[col] = clean_currency(gl[col])
 
@@ -59,7 +59,10 @@ def load_and_clean_gl():
         if col in gl.columns:
             gl[col] = clean_text(gl[col])
 
-    gl["category"] = gl["description"].apply(normalize_category)
+    # Fill missing category with an explicit label — pandas groupby() drops
+    # NaN groups by default, which would silently exclude uncategorized rows
+    # from every category breakdown/pie chart instead of showing them.
+    gl["category"] = gl["description"].apply(normalize_category).fillna("Uncategorized")
     gl["is_adjustment"] = gl["description"].astype(str).str.contains(
         "ADJUSTMENT|CREDIT MEMO|REVERSAL|VOID", case=False, na=False
     ) | (gl["type"].isin(["Credit Memo", "Supplier Credit Memo"]))
