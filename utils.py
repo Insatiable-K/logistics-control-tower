@@ -343,11 +343,16 @@ def load_html_table(path: Path) -> pd.DataFrame:
             break
 
     df = pd.DataFrame(rows[header_idx + 1:], columns=rows[header_idx])
-    # Drop NetSuite footer artifacts (BALANCE FORWARD header rows, PAGE TOTALS
-    # footer rows) that would otherwise pollute aggregations.
+    # Drop NetSuite footer artifacts (BALANCE FORWARD header rows, PAGE
+    # TOTALS / REPORT TOTALS footer rows) that would otherwise pollute
+    # aggregations. Confirmed real risk, not theoretical: a "REPORT TOTALS"
+    # row in Inventory In Transit - Detail.xls has its grand-total dollar
+    # string sitting in the SIPL column (cells are right-shifted relative
+    # to the header on that summary row) — if left in, it would corrupt any
+    # groupby/join keyed on "sipl" with a literal "$5,440,568.03" value.
     first_col = df.columns[0]
     junk_mask = df[first_col].astype(str).str.upper().str.strip().isin(
-        ["BALANCE FORWARD", "PAGE TOTALS", ""]
+        ["BALANCE FORWARD", "PAGE TOTALS", "REPORT TOTALS", ""]
     )
     df = df[~junk_mask].reset_index(drop=True)
     return df
@@ -885,3 +890,142 @@ def get_container_detail(container_id, bills_clean, gl_clean, year=None):
         "vendors": vendors,
         "runs": runs,
     }
+
+
+# =============================================================================
+# IN-TRANSIT LIST BY SIPL — CLEANING PIPELINE
+# =============================================================================
+# Single source of truth for cleaning "In-Transit List by SIPL.xls", shared
+# by in_transit_insights.py. This file's grain is one row per SIPL (the
+# operational status board), unlike Bills.xls where a missing container
+# makes a row useless — here the row's value IS the SIPL/status/ETA
+# tracking regardless of whether a container resolves, so rows are never
+# dropped for a missing/unresolved container, only flagged.
+
+_INITIATED_ON_DATE = re.compile(r"(\d{1,2}/\d{1,2}/\d{4})")
+
+
+def clean_in_transit_dataframe(raw):
+    """
+    Clean a raw "In-Transit List by SIPL.xls" DataFrame (already loaded via
+    load_html_table).
+
+    Returns:
+        (df_clean, original_count, final_count)
+    """
+    original_count = len(raw)
+    df = standardize_columns(raw)
+
+    # Rows with no SIPL are not real shipment records (mirrors the
+    # load_html_table() footer-artifact guard, defensive in case a future
+    # export has a footer variant that guard doesn't yet know about).
+    df = df[df["sipl"].notna() & (df["sipl"].astype(str).str.strip() != "")]
+
+    # "Initiated On 7/6/2026" or bare "7/6/2026" -> a real date. Regex
+    # extraction handles both forms uniformly.
+    extracted = df["initiated_on"].astype(str).str.extract(_INITIATED_ON_DATE)[0]
+    df["initiated_on"] = pd.to_datetime(extracted, errors="coerce", format="mixed")
+
+    # Container field mixes real ISO codes with truck/parcel tracking
+    # numbers, same noisy shape as Bills.xls — reuse clean_container() as-is.
+    # Flagged, not dropped: this row's value is the SIPL/status tracking
+    # itself, independent of whether the shipment happens to be
+    # containerized.
+    df["container"] = df["container"].apply(lambda x: clean_container(x, keep_air_freight_marker=True))
+    df["has_real_container"] = (
+        df["container"].notna()
+        & (df["container"] != "AIR FREIGHT")
+        & (~df["container"].astype(str).str.startswith("AWB "))
+    )
+
+    for col in ["port_eta", "rail_eta", "location_eta", "eta_date", "lfd"]:
+        if col in df.columns:
+            df[col] = clean_date(df[col])
+
+    for col in ["supplier", "ship_to_location", "purchase_location", "vessel",
+                "sipl_status", "status", "fr_forwarder", "departure_port"]:
+        if col in df.columns:
+            df[col] = clean_text(df[col])
+
+    # clean_text() turns blank cells into NaN, and value_counts() drops NaN
+    # by default — without this, the ~10 shipments with no sipl_status on
+    # file would silently vanish from every funnel/breakdown instead of
+    # showing up as their own explicit "Unknown" slice (same fix applied to
+    # GL's category field earlier in this project).
+    df["sipl_status"] = df["sipl_status"].fillna("Unknown")
+
+    # SIPL age: days since initiated. Computed relative to "today" at call
+    # time (not cached), since this is a live operational metric, not a
+    # static historical fact like Bills/GL cleaning.
+    today = pd.Timestamp.today().normalize()
+    df["sipl_age_days"] = (today - df["initiated_on"]).dt.days
+
+    df["has_lfd"] = df["lfd"].notna()
+
+    final_count = len(df)
+    return df, original_count, final_count
+
+
+# =============================================================================
+# INVENTORY IN TRANSIT - DETAIL — CLEANING PIPELINE
+# =============================================================================
+# Single source of truth for cleaning "Inventory In Transit - Detail.xls",
+# shared by inventory_detail_insights.py. Same "flag, don't drop" stance on
+# unresolved containers as clean_in_transit_dataframe() — this file's grain
+# is one row per product line, and product/value visibility doesn't depend
+# on a container having resolved (confirmed: Sample-type lines are almost
+# never containerized by nature, not by data-quality failure).
+
+def clean_inventory_detail_dataframe(raw):
+    """
+    Clean a raw "Inventory In Transit - Detail.xls" DataFrame (already
+    loaded via load_html_table — which itself now strips the "REPORT
+    TOTALS" footer row this export includes).
+
+    Returns:
+        (df_clean, original_count, final_count)
+    """
+    original_count = len(raw)
+    df = standardize_columns(raw)
+
+    # Defensive, mirrors clean_in_transit_dataframe(): a row with no SIPL
+    # cannot be a real product line (every genuine line item belongs to a
+    # shipment) — catches any future footer/summary-row variant that
+    # load_html_table()'s own guard doesn't yet recognize by name.
+    df = df[df["sipl"].notna() & (df["sipl"].astype(str).str.strip() != "")]
+
+    df["container"] = df["container"].apply(lambda x: clean_container(x, keep_air_freight_marker=True))
+    df["has_real_container"] = (
+        df["container"].notna()
+        & (df["container"] != "AIR FREIGHT")
+        & (~df["container"].astype(str).str.startswith("AWB "))
+    )
+
+    for col in ["unit_cost", "total_cost"]:
+        if col in df.columns:
+            df[col] = clean_currency(df[col])
+
+    for col in ["sipl_date", "req_ship_date", "ship_b_l_date", "eta_date"]:
+        if col in df.columns:
+            df[col] = clean_date(df[col])
+
+    for col in ["name", "type", "category", "subcategory", "group", "supplier",
+                "freight_forwarder", "departure_port", "arrival_port", "bill_to", "ship_to"]:
+        if col in df.columns:
+            df[col] = clean_text(df[col])
+
+    df["quantity"] = clean_numeric(df["quantity"])
+
+    # Defensive check for malformed category values (e.g. a stray numeric
+    # value that leaked in from a misaligned report row) — flag rather than
+    # silently including it in category breakdowns.
+    df["category_is_malformed"] = df["category"].astype(str).str.match(r"^[\d,\.]+$", na=False)
+
+    # clean_text() turns blank cells into NaN, and value_counts()/groupby()
+    # drop NaN by default. `category` is used as a primary breakdown
+    # dimension (unlike subcategory/group, which are intentionally shown as
+    # partial views), so it must not silently lose rows.
+    df["category"] = df["category"].fillna("Unknown")
+
+    final_count = len(df)
+    return df, original_count, final_count
