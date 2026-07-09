@@ -64,6 +64,10 @@ def load_and_clean_gl():
         "ADJUSTMENT|CREDIT MEMO|REVERSAL|VOID", case=False, na=False
     ) | (gl["type"].isin(["Credit Memo", "Supplier Credit Memo"]))
 
+    # Create week column for time series (do this before splitting by account)
+    if "date" in gl.columns:
+        gl["week"] = gl["date"].dt.to_period("W")
+
     return gl
 
 
@@ -328,8 +332,7 @@ if "location" in gl.columns and gl["location"].notna().any():
 st.divider()
 st.markdown("### 📅 Freight Costs Over Time")
 
-if "date" in gl.columns:
-    gl["week"] = gl["date"].dt.to_period("W")
+if "week" in gl.columns:
     postings_by_week = gl.groupby("week").size()
     amount_by_week_1275 = gl_1275.groupby("week")["net_amount"].sum() if len(gl_1275) > 0 else pd.Series()
     amount_by_week_1313 = gl_1313.groupby("week")["net_amount"].sum() if len(gl_1313) > 0 else pd.Series()

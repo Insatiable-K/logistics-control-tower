@@ -83,10 +83,13 @@ bills, original_rows, cleaned_rows, retention_pct = load_and_clean_bills()
 # TOP SUMMARY
 # =============================================================================
 st.markdown("### What This Data Represents")
+total_containers = int(bills['container'].nunique())
+total_amount = bills['amount'].sum()
+
 st.markdown(
     f"""
     This dashboard analyzes **{cleaned_rows:,} freight and logistics bills**
-    covering **{bills['container'].nunique():,} different shipments** worth **${bills['amount'].sum():,.0f}** total.
+    covering **{total_containers:,} different shipments** worth **${total_amount:,.0f}** total.
 
     We cleaned the data by removing incomplete records, keeping only bills that have:
     - ✓ A shipment container number
