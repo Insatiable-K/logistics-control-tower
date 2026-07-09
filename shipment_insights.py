@@ -68,57 +68,79 @@ def render_tab():
     )
 
     # =========================================================================
-    # VIEW 0: CURRENTLY ON THE WATER — the core operational cut
+    # VIEW 0: WHERE IS EVERYTHING, PHYSICALLY — the core operational cut
     # =========================================================================
     st.divider()
-    st.markdown("### 🌊 Currently On the Water")
+    st.markdown("### 🌊 Where Is Everything, Physically Right Now")
 
     st.markdown(
         """
         A shipment's `sipl_status` (SIPL Ready, Documents Sent, etc.) tracks
-        *paperwork* stage — it doesn't by itself say whether the container has
-        physically left origin yet. This view answers that directly: **has this
-        shipment actually sailed, and is it still in transit right now** (not
-        yet arrived at the branch)?
+        *paperwork* stage — it's manually updated and can lag physical reality
+        by days. This view instead uses **dates** to determine physical
+        location: `ship_b_l_date` (has it departed?) and `port_eta` (has it
+        reached port yet?), falling back to `location_eta` only when
+        `port_eta` is blank.
 
-        **Method**: a Bill of Lading is issued once cargo is loaded onto the
-        vessel — so a `ship_b_l_date` in the past is a real "has sailed"
-        signal. Shipments already at the branch are excluded even if they
-        technically sailed a while ago — they're on land now, not on water.
+        This matters: checking the data directly found **36 shipments that
+        have already passed their own port ETA** — some by over a week —
+        while still showing statuses like "D.O.s Received" or "On Hold," none
+        marked "At branch." Those containers have physically arrived at port
+        and are in customs/drayage processing — genuinely not "on the water"
+        anymore, but not yet delivered either. Status alone would have missed
+        this; the dates catch it.
         """
     )
 
-    sailing_counts = summary["sailing_status"].value_counts()
-    on_water_now = summary[summary["is_currently_on_water"]]
-    at_branch_already = summary[(summary["sailing_status"] == "On the Water") & (summary["sipl_status"] == "At branch")]
+    physical_counts = summary["physical_status"].value_counts()
+    on_water_now = summary[summary["physical_status"] == "On the Water"]
+    arrived_processing = summary[summary["physical_status"] == "Arrived, Processing"]
+    delivered = summary[summary["physical_status"] == "Delivered (At Branch)"]
+    not_yet_sailed = summary[summary["physical_status"] == "Not Yet Sailed"]
+    cannot_determine = summary[summary["physical_status"] == "Cannot Determine (No Detail)"]
 
-    col1, col2, col3, col4 = st.columns(4)
+    col1, col2, col3, col4, col5 = st.columns(5)
     with col1:
-        st.metric("🌊 Currently On the Water", len(on_water_now))
+        st.metric("🌊 On the Water", len(on_water_now))
     with col2:
-        st.metric("Not Yet Sailed", int(sailing_counts.get("Not Yet Sailed", 0)))
+        st.metric("⚓ Arrived, Processing", len(arrived_processing))
     with col3:
-        st.metric("Already Delivered", len(at_branch_already))
+        st.metric("✅ Delivered", len(delivered))
     with col4:
-        st.metric("Cannot Determine", int(sailing_counts.get("Cannot Determine (No Detail)", 0)))
+        st.metric("Not Yet Sailed", len(not_yet_sailed))
+    with col5:
+        st.metric("Cannot Determine", len(cannot_determine))
 
     on_water_value = on_water_now["total_value"].sum()
     all_in_transit_value = summary["total_value"].sum()
     st.success(
-        f"**${on_water_value:,.0f}** of inventory value is currently on the water "
-        f"right now — this is the number that matters for active operations, not "
-        f"the full **${all_in_transit_value:,.0f}** in-transit total (which also "
-        f"includes shipments still awaiting booking and already-delivered ones)."
+        f"**${on_water_value:,.0f}** of inventory value is genuinely on the water "
+        f"right now — still sailing, hasn't reached port yet. This is narrower "
+        f"than the full **${all_in_transit_value:,.0f}** in-transit total (which "
+        f"also includes shipments still awaiting booking, already at port "
+        f"clearing customs, and already delivered)."
     )
 
-    with st.expander(f"See all {len(on_water_now)} shipments currently on the water"):
+    if len(arrived_processing) > 0:
+        st.warning(
+            f"**{len(arrived_processing)} shipments (${arrived_processing['total_value'].sum():,.0f})** "
+            "have passed their port ETA but aren't marked delivered yet — worth "
+            "checking if these are moving through customs/drayage normally or stuck."
+        )
+
+    with st.expander(f"See all {len(on_water_now)} shipments genuinely on the water"):
         on_water_display = on_water_now[
-            ["sipl", "container", "supplier", "ship_b_l_date", "eta_date", "total_value", "sipl_status"]
-        ].sort_values("eta_date")
+            ["sipl", "container", "supplier", "ship_b_l_date", "port_or_location_eta", "total_value", "sipl_status"]
+        ].rename(columns={"port_or_location_eta": "expected_port_arrival"}).sort_values("expected_port_arrival")
         st.dataframe(on_water_display, use_container_width=True, hide_index=True)
 
-    if sailing_counts.get("Cannot Determine (No Detail)", 0) > 0:
-        cannot_determine = summary[summary["sailing_status"] == "Cannot Determine (No Detail)"]
+    with st.expander(f"See the {len(arrived_processing)} shipments arrived at port but not yet delivered"):
+        processing_display = arrived_processing[
+            ["sipl", "container", "supplier", "port_or_location_eta", "total_value", "sipl_status"]
+        ].rename(columns={"port_or_location_eta": "port_eta_was"}).sort_values("port_eta_was")
+        st.dataframe(processing_display, use_container_width=True, hide_index=True)
+
+    if len(cannot_determine) > 0:
         st.caption(
             f"📌 {len(cannot_determine)} shipment(s) have no inventory detail record, "
             "so there's no Bill of Lading date to check — genuinely unknown, not "
