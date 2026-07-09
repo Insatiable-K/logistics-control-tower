@@ -33,23 +33,45 @@ _NON_CONTAINER_MARKERS = ["TRUCK", "L&S", "R&L", "UPS", "FEDEX", "FED EX",
                           "DHL", "TARGET", "XPO", "DAYLIGHT", "TFORCE",
                           "COOPER", "SEFL", "FLATBED"]
 
+# Matches both "AIR FREIGHT" and "AIRFREIGHT" (no space) — real data uses
+# both forms interchangeably (confirmed: 'AIRFREIGHT 057-53762310',
+# 'AIR FREIGHT SHIPMENT', 'Freight-AIR FREIGHT'). The original pattern only
+# matched the spaced form, silently dropping every no-space row as
+# "no container" during cleaning — a real bug, not just a style choice.
+_AIR_FREIGHT_MARKER = re.compile(r"AIR\s*FREIGHT", re.IGNORECASE)
+
+# IATA Air Waybill number: 3-digit airline prefix + dash + 8-digit serial
+# (e.g. "057-53762310", "001-80805841" from "AWB : 001-80805841"). Where
+# present, this uniquely identifies one specific air shipment — exactly
+# like an ISO 6346 code does for an ocean container — so it should be used
+# as the shipment identifier instead of collapsing every air freight row
+# into one generic, unidentifiable "AIR FREIGHT" bucket.
+_AWB_PATTERN = re.compile(r"\b\d{3}-\d{8}\b")
+
 
 def clean_container(val, keep_air_freight_marker=False):
     """
-    Extract a clean ISO 6346 container ID from a noisy raw field.
+    Extract a clean shipment identifier from a noisy raw field.
 
-    Returns:
-        - The extracted container code (e.g. 'MEDU2304983'), or
-        - 'AIR FREIGHT' if keep_air_freight_marker=True and the raw text
-          indicates an air shipment (no container ID exists for air freight
-          by definition — this is a valid state, not missing data), or
-        - np.nan if no container ID can be determined.
+    Returns, in priority order:
+        - The extracted ISO 6346 ocean container code (e.g. 'MEDU2304983'), or
+        - (if keep_air_freight_marker=True and the text indicates an air
+          shipment) an identifiable Air Waybill reference like 'AWB
+          057-53762310' when one is present in the text, or
+        - 'AIR FREIGHT' as a fallback when the text indicates an air
+          shipment but no AWB number can be extracted — a genuinely
+          unidentifiable air shipment is still a valid state (no container
+          ID exists for air freight by definition), not missing data, or
+        - np.nan if no identifier of any kind can be determined.
     """
     if pd.isna(val) or str(val).strip() == "":
         return np.nan
     text = str(val).upper().strip()
 
-    if keep_air_freight_marker and "AIR FREIGHT" in text:
+    if keep_air_freight_marker and _AIR_FREIGHT_MARKER.search(text):
+        awb_match = _AWB_PATTERN.search(text)
+        if awb_match:
+            return f"AWB {awb_match.group(0)}"
         return "AIR FREIGHT"
 
     match = _ISO_PATTERN.search(text)
@@ -525,7 +547,16 @@ def clean_bills_dataframe(bills_raw):
     bills["has_zero_amount"] = (bills["amount"] == 0) | bills["amount"].isna()
     bills["is_pending_literal"] = is_pending(bills["bill_inv"])
     bills["is_placeholder_junk"] = is_junk_invoice(bills["bill_inv"])
-    bills["is_air_freight"] = bills["container_clean"] == "AIR FREIGHT"
+    # Broad flag: true for ANY air shipment (generic unidentified bucket OR
+    # an individually-identified AWB reference) — used for reporting air vs.
+    # ocean freight generally. Narrower than "is unidentifiable", which is
+    # what callers doing container-level aggregation should check instead
+    # (container == "AIR FREIGHT" specifically) so that AWB-identified air
+    # shipments can still be tracked individually like any other container.
+    bills["is_air_freight"] = (
+        (bills["container_clean"] == "AIR FREIGHT")
+        | bills["container_clean"].astype(str).str.startswith("AWB ")
+    )
 
     # Drop the original noisy container column, promote the cleaned one
     bills = bills.drop(columns=["container"]).rename(columns={"container_clean": "container"})
@@ -617,13 +648,16 @@ def build_container_ledger(bills_clean, gl_clean, start, end):
             that matched no Bill in-window — can't be tied to a container
             from this dataset, reported honestly rather than dropped.
     """
-    # Air Freight has no real container by definition (not "missing data") —
-    # excluded here so it doesn't get grouped into a single bogus "container"
-    # named "AIR FREIGHT". Air freight is analyzed separately in
-    # bills_insights.py; this function is specifically container-level.
+    # Only exclude the genuinely UNIDENTIFIED air freight bucket (literal
+    # "AIR FREIGHT", no AWB number could be extracted) — grouping those
+    # together would fabricate one bogus "container" out of many unrelated
+    # shipments. An air shipment with a real AWB number (e.g. "AWB
+    # 057-53762310") IS individually identifiable, exactly like an ISO
+    # container, so it's kept and flows through the ledger like any other
+    # container — this is what makes it searchable in get_container_detail().
     bills_window = bills_clean[
         (bills_clean["invoice_dt"] >= start) & (bills_clean["invoice_dt"] <= end)
-        & (~bills_clean["is_air_freight"])
+        & (bills_clean["container"] != "AIR FREIGHT")
     ].copy()
     gl_window = gl_clean[
         (gl_clean["date"] >= start) & (gl_clean["date"] <= end)
@@ -737,19 +771,33 @@ def build_container_ledger(bills_clean, gl_clean, start, end):
 # searching a specific container wants the complete picture (every SIPL,
 # every bill, ever), not just recent activity.
 
-def get_container_detail(container_id, bills_clean, gl_clean):
+def get_container_detail(container_id, bills_clean, gl_clean, year=None):
     """
-    Look up full-history detail for a single container.
+    Look up detail for a single container. A container ID is reused across
+    many separate shipments ("runs") over its physical lifetime — a
+    container number does not change year to year, so full, ungrouped
+    history for a container mixes unrelated runs/vendors together and reads
+    as if there are duplicate bills when there aren't. Two things address
+    this: an optional year filter, and grouping the per-bill detail into
+    per-run ("runs" = distinct SIPL) totals.
 
     Args:
         container_id: exact container ID to look up (case-sensitive, as
                        stored — caller should uppercase/strip user input first)
         bills_clean: output of clean_bills_dataframe() (first tuple element)
         gl_clean: output of clean_gl_dataframe()
+        year: optional int (e.g. 2026). If given, restricts to bills whose
+              invoice_dt falls in that year before computing anything else.
+              If None, returns full history across all years.
 
     Returns:
         dict with keys:
-          - 'found': bool — whether any bills exist for this container
+          - 'found': bool — whether any bills exist for this container (in
+            the requested year, if one was given)
+          - 'available_years': sorted list (desc) of years with bills for
+            this container, computed BEFORE the year filter is applied —
+            always the full list, so the caller can populate a year picker
+            regardless of which year is currently selected
           - 'sipl_list': sorted list of unique SIPL numbers tied to this container
           - 'bill_count', 'pending_count', 'matched_count': int summary counts
           - 'total_billed', 'total_gl_confirmed', 'gl_coverage_pct': float
@@ -757,11 +805,26 @@ def get_container_detail(container_id, bills_clean, gl_clean):
             column ('Confirmed' / 'Pending' / 'Awaiting GL Match')
           - 'category_breakdown': dict of category -> $ (from matched GL only)
           - 'vendors': sorted list of unique vendor names
+          - 'runs': DataFrame, one row per SIPL ("run") — total cost, bill
+            count, pending count, and date span for that specific run,
+            answering "how much did this container cost per trip"
     """
     container_bills = bills_clean[bills_clean["container"] == container_id].copy()
 
     if container_bills.empty:
-        return {"found": False, "container": container_id}
+        return {"found": False, "container": container_id, "available_years": []}
+
+    available_years = sorted(
+        container_bills["invoice_dt"].dt.year.dropna().astype(int).unique().tolist(), reverse=True
+    )
+
+    if year is not None:
+        container_bills = container_bills[container_bills["invoice_dt"].dt.year == year]
+        if container_bills.empty:
+            return {"found": False, "container": container_id, "available_years": available_years}
+
+    # Defensive: group key must never silently drop rows with a missing SIPL
+    container_bills["sipl_inv"] = container_bills["sipl_inv"].fillna("Unknown SIPL")
 
     container_bills["is_matchable"] = ~(container_bills["is_pending_literal"] | container_bills["is_placeholder_junk"])
 
@@ -791,9 +854,21 @@ def get_container_detail(container_id, bills_clean, gl_clean):
     vendors = sorted(set(container_bills["non_inventory_vendor"].dropna().astype(str)))
     sipl_list = sorted(set(container_bills["sipl_inv"].dropna().astype(str)))
 
+    # ---- Per-run (per-SIPL) breakdown: "how much did this container cost per trip" ----
+    runs = container_bills.groupby("sipl_inv").agg(
+        total_billed=("amount", "sum"),
+        bill_count=("bill_inv", "count"),
+        first_bill_date=("invoice_dt", "min"),
+        last_bill_date=("invoice_dt", "max"),
+    ).reset_index()
+    pending_per_run = container_bills[container_bills["status"] == "Pending"].groupby("sipl_inv").size()
+    runs["pending_count"] = runs["sipl_inv"].map(pending_per_run).fillna(0).astype(int)
+    runs = runs.sort_values("first_bill_date", ascending=False).reset_index(drop=True)
+
     return {
         "found": True,
         "container": container_id,
+        "available_years": available_years,
         "sipl_list": sipl_list,
         "sipl_count": len(sipl_list),
         "bill_count": len(container_bills),
@@ -808,4 +883,5 @@ def get_container_detail(container_id, bills_clean, gl_clean):
         ].sort_values("invoice_dt", ascending=False),
         "category_breakdown": category_breakdown,
         "vendors": vendors,
+        "runs": runs,
     }

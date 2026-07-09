@@ -76,19 +76,42 @@ def render_tab():
     )
 
     search_input = st.text_input(
-        "Enter a container number (e.g. MEDU2304983):", "", key="container_search"
+        "Enter a container number (e.g. MEDU2304983) or air waybill (e.g. AWB 057-53762310):",
+        "", key="container_search"
     ).strip().upper()
 
     if search_input:
-        detail = get_container_detail(search_input, bills, gl)
-        if not detail["found"]:
-            st.error(f"No bills found for container **{search_input}**. Check the spelling/format (4 letters + 7 digits).")
+        # First pass, unfiltered: discover which years this container actually has activity in,
+        # so the year picker only ever shows real options for this specific container.
+        preview = get_container_detail(search_input, bills, gl)
+
+        if not preview["found"]:
+            st.error(f"No bills found for **{search_input}**. Check the spelling/format (4 letters + 7 digits for a container, or a 3-digit-dash-8-digit AWB number).")
         else:
-            st.success(f"Found **{detail['bill_count']}** bills for container **{search_input}**")
+            st.markdown(
+                """
+                ℹ️ **Same container number, different years = different shipments.**
+                Container IDs get reused once a container is returned — a bill from
+                2024 and a bill from 2026 on the same container number are almost
+                certainly two completely unrelated shipments, not duplicates.
+                Pick a year below to avoid mixing them together.
+                """
+            )
+
+            year_options = ["All Years"] + [str(y) for y in preview["available_years"]]
+            selected_year_str = st.selectbox(
+                "Filter by year:", year_options, key="container_year_filter"
+            )
+            selected_year = None if selected_year_str == "All Years" else int(selected_year_str)
+
+            detail = preview if selected_year is None else get_container_detail(search_input, bills, gl, year=selected_year)
+
+            scope_label = "across all years" if selected_year is None else f"in {selected_year}"
+            st.success(f"Found **{detail['bill_count']}** bills for **{search_input}** {scope_label}")
 
             col1, col2, col3, col4 = st.columns(4)
             with col1:
-                st.metric("SIPLs (shipments)", detail["sipl_count"])
+                st.metric("Runs (SIPLs)", detail["sipl_count"])
             with col2:
                 st.metric("Total Bills", detail["bill_count"])
             with col3:
@@ -102,7 +125,6 @@ def render_tab():
                 - **Confirmed in ledger**: ${detail['total_gl_confirmed']:,.2f}
                 - **Bills confirmed (matched to GL)**: {detail['matched_count']}
                 - **Bills awaiting GL match** (real invoice #, not yet posted): {detail['awaiting_count']}
-                - **SIPLs**: {', '.join(detail['sipl_list']) if detail['sipl_list'] else 'None'}
                 - **Vendors involved**: {', '.join(detail['vendors']) if detail['vendors'] else 'None'}
                 """
             )
@@ -112,18 +134,34 @@ def render_tab():
                 for cat, amt in sorted(detail["category_breakdown"].items(), key=lambda x: -x[1]):
                     st.write(f"- {cat}: ${amt:,.2f}")
 
-            st.markdown("**All bills for this container:**")
-            st.dataframe(
-                detail["bills_detail"],
-                use_container_width=True,
-                hide_index=True,
-                column_config={
-                    "status": st.column_config.TextColumn("Status"),
-                }
+            # ---- Cost per run (per SIPL) ----
+            st.markdown("**💰 Cost Per Run**")
+            st.caption(
+                "A container is reused across many separate shipments — each SIPL below is "
+                "one specific trip. This answers 'how much did this container cost, per run', "
+                "not just a flat total mixing every trip together."
             )
+            runs_display = detail["runs"].rename(columns={
+                "sipl_inv": "Run (SIPL)",
+                "total_billed": "Total Cost",
+                "bill_count": "# Bills",
+                "pending_count": "# Pending",
+                "first_bill_date": "First Bill",
+                "last_bill_date": "Last Bill",
+            })
+            st.dataframe(runs_display, use_container_width=True, hide_index=True)
+
+            with st.expander("See every individual bill (not grouped by run)"):
+                st.dataframe(
+                    detail["bills_detail"],
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={"status": st.column_config.TextColumn("Status")}
+                )
+
             if detail["pending_count"] > 0:
                 st.warning(
-                    f"⚠️ This container has **{detail['pending_count']} pending bill(s)** — "
+                    f"⚠️ This container has **{detail['pending_count']} pending bill(s)** {scope_label} — "
                     "a real cost that's part of the system, just not yet matched to a specific "
                     "ledger entry because no real invoice number has been assigned yet."
                 )
