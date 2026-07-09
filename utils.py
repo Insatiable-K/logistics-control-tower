@@ -457,3 +457,262 @@ def build_vendor_category_mapping(gl_freight, required_categories, threshold=0.9
             mapping[vendor] = 'AMBIGUOUS_VENDOR'
 
     return mapping
+
+
+# =============================================================================
+# PLACEHOLDER / JUNK INVOICE NUMBER DETECTION
+# =============================================================================
+# Beyond literal "PEND*" markers (handled by is_pending()), Bills.xls and GL
+# both contain clerical placeholder invoice numbers that are NOT real invoice
+# IDs: "XENDING" (a corruption of PENDING), and bare sequence numbers used as
+# lazy placeholders ("1", "2", "12", "Posted", "Duplicate"). Confirmed against
+# real data: these values repeat across unrelated containers/vendors, so
+# joining on them (e.g. Bills.bill_inv == GL.invoice) produces false-positive
+# matches. Used by bills_insights.py and build_container_ledger() below.
+
+JUNK_INVOICE_MARKERS = {"XENDING", "1", "2", "12", "POSTED", "DUPLICATE"}
+
+
+def is_junk_invoice(series):
+    """True where the invoice number is a known placeholder (not PEND*-based)."""
+    return series.astype(str).str.strip().str.upper().isin(JUNK_INVOICE_MARKERS)
+
+
+# =============================================================================
+# BILLS.XLS CLEANING PIPELINE
+# =============================================================================
+# Single source of truth for cleaning Bills.xls, shared by bills_insights.py
+# and container_insights.py. "No container = useless row" per project rule —
+# any row that can't resolve to a container (or a legitimate Air Freight
+# marker) is dropped; everything else is flagged, not dropped, so row counts
+# stay reconcilable to the source export.
+
+def clean_bills_dataframe(bills_raw):
+    """
+    Clean a raw Bills.xls DataFrame (already loaded via load_html_table).
+
+    Returns:
+        (bills_clean, original_count, final_count) — cleaned DataFrame plus
+        row counts for the caller to report a cleaning waterfall.
+    """
+    original_count = len(bills_raw)
+    bills = standardize_columns(bills_raw)
+
+    # Step 1: Remove rows with no container
+    bills = bills[bills["container"].notna() & (bills["container"].astype(str).str.strip() != "")]
+
+    # Step 2: Remove rows with no invoice number
+    bills = bills[bills["bill_inv"].notna() & (bills["bill_inv"].astype(str).str.strip() != "")]
+
+    # Step 3: Remove exact duplicate bills
+    bills = bills.drop_duplicates(subset=["container", "bill_inv"], keep="first")
+
+    # Step 4: Clean container — extract ISO 6346, keep Air Freight as its own category
+    bills["container_clean"] = bills["container"].apply(lambda x: clean_container(x, keep_air_freight_marker=True))
+    bills = bills[bills["container_clean"].notna()]
+
+    # Step 5: Clean currency fields
+    for col in ["amount", "balance_due", "sipl_amount"]:
+        if col in bills.columns:
+            bills[col] = clean_currency(bills[col])
+
+    # Step 6: Clean date fields
+    for col in bills.columns:
+        if ("date" in col.lower() or "dt" in col.lower()) and bills[col].dtype == "object":
+            bills[col] = clean_date(bills[col])
+
+    # Step 7: Flag anomalies (keep them, don't drop)
+    bills["has_zero_amount"] = (bills["amount"] == 0) | bills["amount"].isna()
+    bills["is_pending_literal"] = is_pending(bills["bill_inv"])
+    bills["is_placeholder_junk"] = is_junk_invoice(bills["bill_inv"])
+    bills["is_air_freight"] = bills["container_clean"] == "AIR FREIGHT"
+
+    # Drop the original noisy container column, promote the cleaned one
+    bills = bills.drop(columns=["container"]).rename(columns={"container_clean": "container"})
+
+    final_count = len(bills)
+    return bills, original_count, final_count
+
+
+# =============================================================================
+# GL 1275 + 1313 CLEANING PIPELINE
+# =============================================================================
+# Single source of truth for cleaning/combining the two GL accounts, shared
+# by gl_insights.py and container_insights.py.
+
+def clean_gl_dataframe(gl_1275_raw, gl_1313_raw):
+    """
+    Clean and combine raw GL 1275 + 1313 DataFrames (already loaded via
+    load_html_table). Tags each row with its source account.
+
+    Returns:
+        Combined, cleaned GL DataFrame with an 'account' column
+        ("1275 - Capitalized" / "1313 - Prepaid").
+    """
+    gl_1275 = standardize_columns(gl_1275_raw)
+    gl_1313 = standardize_columns(gl_1313_raw)
+
+    gl_1275["account"] = "1275 - Capitalized"
+    gl_1313["account"] = "1313 - Prepaid"
+
+    gl = pd.concat([gl_1275, gl_1313], ignore_index=True)
+
+    # Clean currency fields
+    for col in ["debit", "credit", "balance"]:
+        if col in gl.columns:
+            gl[col] = clean_currency(gl[col])
+
+    gl["net_amount"] = gl["debit"].fillna(0) - gl["credit"].fillna(0)
+
+    if "date" in gl.columns:
+        gl["date"] = clean_date(gl["date"])
+
+    for col in ["party", "description"]:
+        if col in gl.columns:
+            gl[col] = clean_text(gl[col])
+
+    # Fill missing category with an explicit label — pandas groupby() drops
+    # NaN groups by default, which would silently exclude uncategorized rows
+    # from every category breakdown/pie chart instead of showing them.
+    gl["category"] = gl["description"].apply(normalize_category).fillna("Uncategorized")
+
+    gl["is_adjustment"] = gl["description"].astype(str).str.contains(
+        "ADJUSTMENT|CREDIT MEMO|REVERSAL|VOID", case=False, na=False
+    ) | (gl["type"].isin(["Credit Memo", "Supplier Credit Memo"]))
+
+    # Week column for time series (created before any account split so both
+    # halves keep it)
+    if "date" in gl.columns:
+        gl["week"] = gl["date"].dt.to_period("W")
+
+    return gl
+
+
+# =============================================================================
+# CONTAINER-LEVEL LEDGER (Bills ↔ GL merge)
+# =============================================================================
+# Join Bills to GL via invoice number, scoped to an operational date window,
+# and aggregate to container level. GL has no container field of its own —
+# this is the deliberate, deferred join that makes container-level GL
+# insight possible at all.
+
+def build_container_ledger(bills_clean, gl_clean, start, end):
+    """
+    Merge cleaned Bills and GL data into a container-level ledger.
+
+    Args:
+        bills_clean: output of clean_bills_dataframe() (first element of the tuple)
+        gl_clean: output of clean_gl_dataframe()
+        start, end: pd.Timestamp bounds (inclusive) for the operational window.
+                    Bills filtered by invoice_dt, GL filtered by date.
+
+    Returns:
+        dict with keys:
+          - 'container_ledger': one row per container active in the window,
+            with billed/GL-confirmed totals, coverage %, category breakdown,
+            vendor list, and (for 1275 matches) a 'notes' field.
+          - 'matched_detail': row-level Bills↔GL matches (for drill-down /
+            the 1275 traceability section).
+          - 'unmatched_gl': GL rows in-window with a real invoice number
+            that matched no Bill in-window — can't be tied to a container
+            from this dataset, reported honestly rather than dropped.
+    """
+    # Air Freight has no real container by definition (not "missing data") —
+    # excluded here so it doesn't get grouped into a single bogus "container"
+    # named "AIR FREIGHT". Air freight is analyzed separately in
+    # bills_insights.py; this function is specifically container-level.
+    bills_window = bills_clean[
+        (bills_clean["invoice_dt"] >= start) & (bills_clean["invoice_dt"] <= end)
+        & (~bills_clean["is_air_freight"])
+    ].copy()
+    gl_window = gl_clean[
+        (gl_clean["date"] >= start) & (gl_clean["date"] <= end)
+    ].copy()
+
+    # Matchable = has a real (non-placeholder, non-pending) invoice number.
+    # Matching on placeholder values (e.g. "PENDING" == "PENDING") would be a
+    # false-positive join, not a real transaction link — verified against
+    # real data (naive join gave a suspicious 100% match rate driven by
+    # placeholder collisions).
+    bills_window["is_matchable"] = ~(bills_window["is_pending_literal"] | bills_window["is_placeholder_junk"])
+    gl_window["is_matchable"] = ~(is_pending(gl_window["invoice"]) | is_junk_invoice(gl_window["invoice"]))
+
+    matchable_bills = bills_window[bills_window["is_matchable"]]
+    matchable_gl = gl_window[gl_window["is_matchable"]]
+
+    matched_detail = matchable_bills.merge(
+        matchable_gl,
+        left_on="bill_inv",
+        right_on="invoice",
+        how="inner",
+        suffixes=("_bill", "_gl"),
+    )
+
+    # notes field: only for matches sourced from the 1275 (Capitalized) account
+    matched_detail["notes"] = ""
+    is_1275 = matched_detail["account"] == "1275 - Capitalized"
+    matched_detail.loc[is_1275, "notes"] = (
+        "Container: " + matched_detail.loc[is_1275, "container"].astype(str)
+        + " | SIPL: " + matched_detail.loc[is_1275, "sipl_inv"].astype(str)
+    )
+
+    # ---- Container-level aggregation ----
+    total_billed = bills_window.groupby("container")["amount"].sum().rename("total_billed")
+    total_gl_confirmed = matched_detail.groupby("container")["net_amount"].sum().rename("total_gl_confirmed")
+    bill_count = bills_window.groupby("container").size().rename("bill_count")
+    gl_matched_count = matched_detail.groupby("container").size().rename("gl_matched_count")
+    awaiting_gl_count = (
+        bills_window[~bills_window["is_matchable"]].groupby("container").size().rename("awaiting_gl_count")
+    )
+    # Delimiter must NOT be a comma — 24% of real vendor names contain a
+    # comma as part of their own legal name (e.g. "Department of HomeLand
+    # Security, Bureau of Customs and Border Protection", "EWI, Inc."), so
+    # joining/splitting on ", " would fabricate fake duplicate vendor
+    # fragments. " | " does not collide with any vendor name in this data.
+    vendor_list = (
+        bills_window.groupby("container")["non_inventory_vendor"]
+        .apply(lambda s: " | ".join(sorted(set(s.dropna().astype(str)))))
+        .rename("vendors")
+    )
+    notes_by_container = (
+        matched_detail[matched_detail["notes"] != ""]
+        .groupby("container")["notes"]
+        .apply(lambda s: " ; ".join(sorted(set(s))))
+        .rename("notes")
+    )
+
+    # Category breakdown pivoted to one column per category
+    category_breakdown = (
+        matched_detail.pivot_table(
+            index="container", columns="category", values="net_amount", aggfunc="sum", fill_value=0
+        )
+    )
+
+    container_ledger = pd.concat(
+        [total_billed, total_gl_confirmed, bill_count, gl_matched_count, awaiting_gl_count, vendor_list, notes_by_container],
+        axis=1,
+    ).reset_index()
+
+    container_ledger["total_gl_confirmed"] = container_ledger["total_gl_confirmed"].fillna(0)
+    container_ledger["gl_matched_count"] = container_ledger["gl_matched_count"].fillna(0).astype(int)
+    container_ledger["awaiting_gl_count"] = container_ledger["awaiting_gl_count"].fillna(0).astype(int)
+    container_ledger["notes"] = container_ledger["notes"].fillna("")
+    container_ledger["gl_coverage_pct"] = np.where(
+        container_ledger["total_billed"] > 0,
+        100 * container_ledger["total_gl_confirmed"] / container_ledger["total_billed"],
+        0,
+    )
+
+    container_ledger = container_ledger.merge(
+        category_breakdown, on="container", how="left"
+    )
+
+    # ---- Unmatched GL: real invoice numbers with no Bills match in-window ----
+    matched_gl_invoices = set(matched_detail["invoice"].dropna().unique())
+    unmatched_gl = matchable_gl[~matchable_gl["invoice"].isin(matched_gl_invoices)]
+
+    return {
+        "container_ledger": container_ledger,
+        "matched_detail": matched_detail,
+        "unmatched_gl": unmatched_gl,
+    }

@@ -14,10 +14,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from utils import (
-    load_html_table, standardize_columns, clean_container, clean_currency,
-    clean_date, clean_text, is_pending
-)
+from utils import load_html_table, clean_bills_dataframe
 
 st.set_page_config(page_title="Bills Insights", layout="wide")
 
@@ -33,48 +30,10 @@ st.markdown(
 # =============================================================================
 @st.cache_data
 def load_and_clean_bills():
-    """Load Bills.xls and perform thorough cleaning."""
+    """Load Bills.xls and perform thorough cleaning (shared logic in utils.py)."""
     bills_raw = load_html_table(Path("Bills.xls"))
-    original_count = len(bills_raw)
-    bills = standardize_columns(bills_raw)
-
-    # Step 1: Remove rows with no container
-    bills = bills[bills["container"].notna() & (bills["container"].astype(str).str.strip() != "")]
-
-    # Step 2: Remove rows with no invoice number
-    bills = bills[bills["bill_inv"].notna() & (bills["bill_inv"].astype(str).str.strip() != "")]
-
-    # Step 3: Remove duplicate bills
-    bills = bills.drop_duplicates(subset=["container", "bill_inv"], keep="first")
-
-    # Step 4: Clean container
-    bills["container_clean"] = bills["container"].apply(lambda x: clean_container(x, keep_air_freight_marker=True))
-    bills = bills[bills["container_clean"].notna()]
-
-    # Step 5: Clean amounts
-    for col in ["amount", "balance_due", "sipl_amount"]:
-        if col in bills.columns:
-            bills[col] = clean_currency(bills[col])
-
-    # Step 6: Clean dates
-    for col in bills.columns:
-        if "date" in col.lower() or "dt" in col.lower():
-            if bills[col].dtype == "object":
-                bills[col] = clean_date(bills[col])
-
-    # Step 7: Flag anomalies (but keep them)
-    bills["has_zero_amount"] = (bills["amount"] == 0) | bills["amount"].isna()
-    bills["is_pending_literal"] = is_pending(bills["bill_inv"])
-    bills["is_placeholder_junk"] = bills["bill_inv"].astype(str).apply(
-        lambda x: str(x).strip().upper() in ["XENDING", "1", "2", "12", "POSTED", "DUPLICATE"]
-    )
-    bills["is_air_freight"] = bills["container_clean"] == "AIR FREIGHT"
-
-    # Drop the original noisy container column, promote the cleaned one
-    bills = bills.drop(columns=["container"]).rename(columns={"container_clean": "container"})
-    final_count = len(bills)
+    bills, original_count, final_count = clean_bills_dataframe(bills_raw)
     retention = 100 * final_count / original_count
-
     return bills, original_count, final_count, retention
 
 

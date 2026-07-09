@@ -14,10 +14,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from utils import (
-    load_html_table, standardize_columns, clean_currency, clean_date,
-    clean_text, normalize_category
-)
+from utils import load_html_table, clean_gl_dataframe
 
 st.set_page_config(page_title="GL Insights", layout="wide")
 
@@ -33,45 +30,10 @@ st.markdown(
 # =============================================================================
 @st.cache_data
 def load_and_clean_gl():
-    """Load GL 1275 & 1313 and perform cleaning."""
-    gl_1275 = load_html_table(Path("Account Register_ 1275 - Capitalized Inventory Freight.xls"))
-    gl_1313 = load_html_table(Path("Account Register_ 1313 - Prepaid Container Freight.xls"))
-
-    gl_1275 = standardize_columns(gl_1275)
-    gl_1313 = standardize_columns(gl_1313)
-
-    gl_1275["account"] = "1275 - Capitalized"
-    gl_1313["account"] = "1313 - Prepaid"
-
-    gl = pd.concat([gl_1275, gl_1313], ignore_index=True)
-
-    # Clean
-    for col in ["debit", "credit", "balance"]:
-        if col in gl.columns:
-            gl[col] = clean_currency(gl[col])
-
-    gl["net_amount"] = gl["debit"].fillna(0) - gl["credit"].fillna(0)
-
-    if "date" in gl.columns:
-        gl["date"] = clean_date(gl["date"])
-
-    for col in ["party", "description"]:
-        if col in gl.columns:
-            gl[col] = clean_text(gl[col])
-
-    # Fill missing category with an explicit label — pandas groupby() drops
-    # NaN groups by default, which would silently exclude uncategorized rows
-    # from every category breakdown/pie chart instead of showing them.
-    gl["category"] = gl["description"].apply(normalize_category).fillna("Uncategorized")
-    gl["is_adjustment"] = gl["description"].astype(str).str.contains(
-        "ADJUSTMENT|CREDIT MEMO|REVERSAL|VOID", case=False, na=False
-    ) | (gl["type"].isin(["Credit Memo", "Supplier Credit Memo"]))
-
-    # Create week column for time series (do this before splitting by account)
-    if "date" in gl.columns:
-        gl["week"] = gl["date"].dt.to_period("W")
-
-    return gl
+    """Load GL 1275 & 1313 and perform cleaning (shared logic in utils.py)."""
+    gl_1275_raw = load_html_table(Path("Account Register_ 1275 - Capitalized Inventory Freight.xls"))
+    gl_1313_raw = load_html_table(Path("Account Register_ 1313 - Prepaid Container Freight.xls"))
+    return clean_gl_dataframe(gl_1275_raw, gl_1313_raw)
 
 
 gl = load_and_clean_gl()
