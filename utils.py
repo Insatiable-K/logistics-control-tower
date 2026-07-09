@@ -332,6 +332,68 @@ def load_html_table(path: Path) -> pd.DataFrame:
 
 
 # =============================================================================
+# GL DESCRIPTION → CATEGORY CLASSIFICATION
+# =============================================================================
+# Normalize free-text GL description into one of the four required
+# freight-cost categories (OF/CUSTOMS/DUTY/DRAYAGE) or flag as ACCESSORIAL
+# (service charges not directly freight cost). Used by both build_dashboard_data.py
+# (ETL classification) and gl_insights.py (exploratory dashboard).
+
+REQUIRED_CATEGORIES = ["OF", "CUSTOMS", "DUTY", "DRAYAGE"]
+ACCESSORIAL_LABEL = "ACCESSORIAL"
+
+def normalize_category(text):
+    """
+    Classify a GL description into one of: OF, CUSTOMS, DUTY, DRAYAGE,
+    ACCESSORIAL, or None (if uncategorizable).
+
+    Handles abbreviations, full text, fuzzy matching, and known junk patterns.
+    Requires rapidfuzz to be installed for fuzzy matching fallback; if not
+    available, fuzzy matching is skipped (category is None if no exact match).
+    """
+    if pd.isna(text):
+        return None
+
+    t = str(text).strip().upper()
+
+    # Reject known junk patterns early
+    if t == "" or t in {"MISC", "PO", "AMS", "ISF", "ISC"} or re.match(r"^PO\s*#", t):
+        pass
+
+    # Check for specific category keywords (abbreviations or full text)
+    if t == "OF" or "OCEAN FREIGHT" in t or "AIR FREIGHT" in t or "AIRFREIGHT" in t:
+        return "OF"
+    if "CUSTOM" in t or "BROKERAGE" in t:
+        return "CUSTOMS"
+    if "DUTY" in t:
+        return "DUTY"
+    if "DRAY" in t:
+        return "DRAYAGE"
+
+    # Reject PO-number-only lines
+    if re.match(r"^PO\s*#?\s*\d", t):
+        return None
+
+    # Check for known accessorial (service, not freight) terms
+    accessorial_terms = ["DETENTION", "DEMURRAGE", "PER DIEM", "CHASSIS", "EXAM",
+                          "TERMINAL", "ADMIN FEE", "MISC", "CREDIT MEMO", "AMS",
+                          "ISF", "ISC", "FLATBED", "PER PULL", "DAMAGE"]
+    if any(term in t for term in accessorial_terms):
+        return ACCESSORIAL_LABEL
+
+    # Fuzzy match as last resort (if rapidfuzz available)
+    try:
+        from rapidfuzz import process, fuzz
+        match = process.extractOne(t, REQUIRED_CATEGORIES, scorer=fuzz.ratio)
+        if match and match[1] >= 85:
+            return match[0]
+    except ImportError:
+        pass
+
+    return None
+
+
+# =============================================================================
 # VENDOR → CATEGORY INFERENCE MAPPING
 # =============================================================================
 # For pending bills without a real invoice number (category unknown), infer the

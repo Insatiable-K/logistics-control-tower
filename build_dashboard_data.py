@@ -44,7 +44,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from utils import (
     load_html_table, standardize_columns, clean_currency, clean_date,
     clean_numeric, clean_text, clean_container, is_pending,
-    build_vendor_category_mapping,
+    build_vendor_category_mapping, normalize_category, REQUIRED_CATEGORIES, ACCESSORIAL_LABEL,
 )
 
 # =============================================================================
@@ -56,9 +56,6 @@ OUTPUT_DIR = Path(__file__).parent / "data"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 TODAY = pd.Timestamp.today().normalize()
-
-REQUIRED_CATEGORIES = ["OF", "CUSTOMS", "DUTY", "DRAYAGE"]
-ACCESSORIAL_LABEL = "ACCESSORIAL"
 
 FILES = {
     # INVOICE COMPLIANCE SOURCES (5 only)
@@ -408,37 +405,8 @@ print("\n--- STEP 5: CLASSIFY INVOICES BY GL DESCRIPTION ---")
 
 try:
     from rapidfuzz import process, fuzz
-    HAVE_RAPIDFUZZ = True
 except ImportError:
-    HAVE_RAPIDFUZZ = False
-    print("  [WARN] rapidfuzz not installed")
-
-def normalize_category(text):
-    if pd.isna(text):
-        return None
-    t = str(text).strip().upper()
-    if t == "" or t in {"MISC", "PO", "AMS", "ISF", "ISC"} or re.match(r"^PO\s*#", t):
-        pass
-    if t == "OF" or "OCEAN FREIGHT" in t or "AIR FREIGHT" in t or "AIRFREIGHT" in t:
-        return "OF"
-    if "CUSTOM" in t or "BROKERAGE" in t:
-        return "CUSTOMS"
-    if "DUTY" in t:
-        return "DUTY"
-    if "DRAY" in t:
-        return "DRAYAGE"
-    if re.match(r"^PO\s*#?\s*\d", t):
-        return None
-    accessorial_terms = ["DETENTION", "DEMURRAGE", "PER DIEM", "CHASSIS", "EXAM",
-                          "TERMINAL", "ADMIN FEE", "MISC", "CREDIT MEMO", "AMS",
-                          "ISF", "ISC", "FLATBED", "PER PULL", "DAMAGE"]
-    if any(term in t for term in accessorial_terms):
-        return ACCESSORIAL_LABEL
-    if HAVE_RAPIDFUZZ:
-        match = process.extractOne(t, REQUIRED_CATEGORIES, scorer=fuzz.ratio)
-        if match and match[1] >= 85:
-            return match[0]
-    return None
+    pass
 
 gl_freight["category"] = gl_freight["description"].apply(normalize_category)
 gl_lookup = (
