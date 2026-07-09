@@ -15,6 +15,7 @@ import numpy as np
 import pandas as pd
 from pathlib import Path
 from lxml import etree
+from rapidfuzz import fuzz, process
 
 # =============================================================================
 # ISO 6346 CONTAINER EXTRACTION
@@ -769,6 +770,143 @@ def build_container_ledger(bills_clean, gl_clean, start, end):
         "matched_detail": matched_detail,
         "unmatched_gl": unmatched_gl,
         "pending_bill_detail": pending_bill_detail,
+    }
+
+
+# =============================================================================
+# CONTAINER-LEVEL INVOICE COMPLIANCE (Missing vs. Pending, per category)
+# =============================================================================
+# For a physically-tracked container (from the In-Transit universe), score
+# each of the 4 required categories (OF/CUSTOMS/DUTY/DRAYAGE) as:
+#   - Complete: a bill's invoice number matches a GL entry classified into
+#     that category (a single invoice can legitimately confirm more than
+#     one category — verified 1,075 of 2,817 classified GL invoices span
+#     >1 category, so this must NOT be deduplicated to one category/invoice).
+#   - Pending: not Complete, but the container has at least one unresolved
+#     bill on file (a literal placeholder like "PENDING", or a real invoice
+#     number just not GL-posted yet) — something is already in motion, so
+#     the team's job is to chase the vendor for the real invoice, not
+#     create a duplicate placeholder. Each such bill is separately enriched
+#     with a best-guess category via vendor evidence (fuzzy-matched against
+#     GL's vendor history; only used when the vendor is unambiguous, i.e.
+#     >=90% of their classified GL lines fall into one category) — this is
+#     informational (helps the team know what to chase) and deliberately
+#     does NOT gate Missing vs. Pending, since an ambiguous/unmatched
+#     vendor is still real evidence *something* is outstanding.
+#   - Missing: not Complete, and the container has zero bills of any kind
+#     (matched or unresolved) — nothing has been entered into Bills.xls at
+#     all; the team needs to create a placeholder AND chase the vendor from
+#     scratch. This is the "truly missing" bucket.
+# An earlier stricter design (Pending only when vendor evidence confidently
+# named the exact category, else Missing) was rejected — verified it
+# inflated Missing by wrongly flagging categories "missing" on containers
+# that already had an unresolved bill in progress (36 of 405 category-slots
+# in real data), which would have caused duplicate placeholder creation.
+
+def score_container_invoice_compliance(bills_clean, gl_clean, tracked_containers,
+                                        required_categories=None, vendor_match_threshold=80,
+                                        dominance_threshold=0.90):
+    """
+    Score each (container, category) pair in tracked_containers as
+    Complete / Pending / Missing. Uses FULL bill/GL history (no date
+    window) — the true current invoice state for these containers,
+    regardless of when the underlying bill or GL entry was dated.
+
+    Returns:
+        dict with keys:
+          - 'compliance_detail': one row per (container, category), with
+            'status' and, for Pending rows, 'evidence' (matched vendor or
+            None if the pending bill's vendor was ambiguous/unmatched).
+          - 'pending_bills': one row per unresolved bill on a tracked
+            container, with 'inferred_category' (best-guess via vendor
+            evidence, or 'Unclear' if the vendor is ambiguous or has no
+            classified GL history at all) — feeds a "needs an actual bill"
+            view.
+          - 'missing_summary': compliance_detail filtered to Missing rows
+            only — feeds a "needs a placeholder + vendor chase" view.
+    """
+    if required_categories is None:
+        required_categories = REQUIRED_CATEGORIES
+
+    vendor_category_map = build_vendor_category_mapping(gl_clean, required_categories, threshold=dominance_threshold)
+    unambiguous_vendors = {v: c for v, c in vendor_category_map.items() if c != "AMBIGUOUS_VENDOR"}
+    gl_vendor_names = list(unambiguous_vendors.keys())
+
+    bills = bills_clean.copy()
+    bills["is_matchable"] = ~(bills["is_pending_literal"] | bills["is_placeholder_junk"])
+    gl = gl_clean.copy()
+    gl["is_matchable"] = ~(is_pending(gl["invoice"]) | is_junk_invoice(gl["invoice"]))
+    matchable_gl = gl[gl["is_matchable"]]
+
+    # invoice -> set of categories (NOT deduplicated to one — see docstring)
+    gl_lookup = matchable_gl[matchable_gl["category"] != "Uncategorized"][["invoice", "category"]].drop_duplicates()
+    gl_invoice_to_categories = gl_lookup.groupby("invoice")["category"].apply(set).to_dict()
+
+    bills_scope = bills[bills["container"].isin(tracked_containers)].copy()
+
+    def infer_vendor_category(vendor):
+        if pd.isna(vendor) or not gl_vendor_names:
+            return None
+        match = process.extractOne(str(vendor), gl_vendor_names, scorer=fuzz.ratio)
+        if match and match[1] >= vendor_match_threshold:
+            return unambiguous_vendors[match[0]], match[0], match[1]
+        return None
+
+    compliance_rows = []
+    pending_bill_rows = []
+
+    for container in tracked_containers:
+        c_bills = bills_scope[bills_scope["container"] == container]
+
+        complete_cats = set()
+        pending_cats_evidence = {}
+
+        matched_invoices = set()
+        for _, b in c_bills[c_bills["is_matchable"]].iterrows():
+            cats = gl_invoice_to_categories.get(b["bill_inv"])
+            if cats:
+                matched_invoices.add(b["bill_inv"])
+                for cat in cats:
+                    complete_cats.add(cat)
+
+        unresolved = c_bills[~c_bills["bill_inv"].isin(matched_invoices)]
+
+        for _, b in unresolved.iterrows():
+            inferred = infer_vendor_category(b["non_inventory_vendor"])
+            if inferred:
+                cat, matched_vendor, score = inferred
+                if cat not in complete_cats:
+                    pending_cats_evidence.setdefault(cat, f"{b['non_inventory_vendor']} -> {matched_vendor} ({score:.0f}%)")
+                inferred_category_label = cat
+            else:
+                inferred_category_label = "Unclear"
+            pending_bill_rows.append({
+                "container": container, "bill_inv": b["bill_inv"],
+                "vendor": b["non_inventory_vendor"], "amount": b["amount"],
+                "invoice_dt": b["invoice_dt"], "inferred_category": inferred_category_label,
+            })
+
+        has_unresolved_bill = len(unresolved) > 0
+
+        for cat in required_categories:
+            if cat in complete_cats:
+                status, evidence = "Complete", None
+            elif cat in pending_cats_evidence:
+                status, evidence = "Pending", pending_cats_evidence[cat]
+            elif has_unresolved_bill:
+                status, evidence = "Pending", None
+            else:
+                status, evidence = "Missing", None
+            compliance_rows.append({"container": container, "category": cat, "status": status, "evidence": evidence})
+
+    compliance_detail = pd.DataFrame(compliance_rows)
+    pending_bills = pd.DataFrame(pending_bill_rows)
+    missing_summary = compliance_detail[compliance_detail["status"] == "Missing"].copy()
+
+    return {
+        "compliance_detail": compliance_detail,
+        "pending_bills": pending_bills,
+        "missing_summary": missing_summary,
     }
 
 
