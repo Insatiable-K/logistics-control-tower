@@ -77,21 +77,23 @@ def render_tab():
         """
         A shipment's `sipl_status` (SIPL Ready, Documents Sent, etc.) tracks
         *paperwork* stage — it's manually updated and can lag physical reality
-        by days. This view instead uses **dates** to determine physical
-        location: `ship_b_l_date` (has it departed?) and `port_eta` (has it
-        reached port yet?), falling back to `location_eta` only when
-        `port_eta` is blank — and if **neither** date exists, that's reported
-        as genuinely unknown rather than assumed either way.
+        by days. This view instead uses **three dates**, each checked for its
+        own specific milestone (not substituted for one another):
+        `ship_b_l_date` (has it departed?), `port_eta` (has it reached the
+        port yet?), and `location_eta` (has it reached the branch yet? —
+        this is always later than port_eta, ~7 days on average, since branch
+        arrival happens after customs clearance and drayage from port). If
+        **no port ETA** exists at all, that's reported as genuinely unknown
+        rather than assumed either way.
 
-        This matters both ways: checking the data directly found **36
-        shipments that have already passed their own port ETA** — some by
-        over a week — while still showing statuses like "D.O.s Received" or
-        "On Hold," none marked "At branch." It also found **20 shipments with
-        no port or location ETA at all** — these were previously being
-        defaulted to "on the water" just because status wasn't "At branch,"
-        which is the same unreliable-status problem in the other direction.
-        Both are now called out explicitly instead of silently folded into
-        "on the water."
+        This matters in both directions: checking the data directly found
+        **36 shipments that have already passed their own port ETA** — some
+        by over a week — while still showing statuses like "D.O.s Received"
+        or "On Hold," none marked "At branch." It also found **20 shipments
+        with no port ETA at all** — these were previously being defaulted to
+        "on the water" just because status wasn't "At branch," the same
+        unreliable-status problem in the other direction. Both are now
+        called out explicitly instead of silently folded into "on the water."
         """
     )
 
@@ -134,14 +136,14 @@ def render_tab():
 
     with st.expander(f"See all {len(on_water_now)} shipments genuinely on the water"):
         on_water_display = on_water_now[
-            ["sipl", "container", "supplier", "ship_b_l_date", "port_or_location_eta", "total_value", "sipl_status"]
-        ].rename(columns={"port_or_location_eta": "expected_port_arrival"}).sort_values("expected_port_arrival")
+            ["sipl", "container", "supplier", "ship_b_l_date", "port_eta", "location_eta", "total_value", "sipl_status"]
+        ].rename(columns={"port_eta": "expected_port_arrival", "location_eta": "expected_branch_arrival"}).sort_values("expected_port_arrival")
         st.dataframe(on_water_display, use_container_width=True, hide_index=True)
 
     with st.expander(f"See the {len(arrived_processing)} shipments arrived at port but not yet delivered"):
         processing_display = arrived_processing[
-            ["sipl", "container", "supplier", "port_or_location_eta", "total_value", "sipl_status"]
-        ].rename(columns={"port_or_location_eta": "port_eta_was"}).sort_values("port_eta_was")
+            ["sipl", "container", "supplier", "port_eta", "location_eta", "total_value", "sipl_status"]
+        ].rename(columns={"port_eta": "port_eta_was", "location_eta": "expected_branch_arrival"}).sort_values("port_eta_was")
         st.dataframe(processing_display, use_container_width=True, hide_index=True)
 
     if cannot_determine_total > 0:

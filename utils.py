@@ -1130,16 +1130,21 @@ def merge_sipl_inventory(sipl_clean, inventory_clean):
             all — "On the Water", "Not Yet Sailed", or "Cannot Determine
             (No Detail)") and the more precise 'physical_status', a
             six-way model of where the SIPL physically is RIGHT NOW,
-            derived from dates (port_eta/location_eta), not from
-            sipl_status alone (which is a manually-updated paperwork field
-            that can lag physical reality by days): "Not Yet Sailed", "On
-            the Water" (departed, port/location ETA still ahead or exactly
-            today), "Arrived, Processing" (past ETA but not yet "At
-            branch" — physically at port/in customs/awaiting drayage),
-            "Delivered (At Branch)", "Cannot Determine (No Detail)" (no
-            inventory match, no B/L date to check), or "Cannot Determine
-            (No ETA Data)" (sailed, but neither port_eta nor location_eta
-            exists — genuinely unknown whether it's arrived, NOT assumed
+            derived from dates, not from sipl_status alone (a manually-
+            updated paperwork field that can lag physical reality by days).
+            port_eta and location_eta measure two DIFFERENT sequential
+            milestones (confirmed: location_eta is always >= port_eta —
+            branch arrival happens after port arrival, ~7 days later on
+            average) and are checked separately, not coalesced: port_eta
+            determines "On the Water" vs. "Arrived, Processing"; location_eta
+            (or sipl_status == "At branch") determines "Delivered (At
+            Branch)". Values: "Not Yet Sailed", "On the Water" (departed,
+            port_eta still ahead or exactly today), "Arrived, Processing"
+            (past port_eta but not yet at branch — physically at port/in
+            customs/awaiting drayage), "Delivered (At Branch)", "Cannot
+            Determine (No Detail)" (no inventory match, no B/L date to
+            check), or "Cannot Determine (No ETA Data)" (sailed, but no
+            port_eta exists — genuinely unknown whether it's arrived, NOT assumed
             still on water just because status isn't "At branch" either —
             that would repeat the same status-can't-be-trusted mistake this
             whole model exists to avoid). 'is_currently_on_water' is True
@@ -1189,38 +1194,38 @@ def merge_sipl_inventory(sipl_clean, inventory_clean):
 
     sipl_summary["sailing_status"] = sipl_summary.apply(_sailing_status, axis=1)
 
-    # "Has arrived at port" is determined from a real date (port_eta,
-    # falling back to location_eta when port_eta is blank), NOT from
-    # sipl_status — status is a manually-updated workflow field that can lag
-    # behind physical reality by days. Verified against real data: 43 SIPLs
-    # had already passed their own port_eta (some by over a week) while
-    # still showing "D.O.s Received" / "Scheduled for Delivery" / "On Hold"
-    # — none of them "At branch" — so checking status alone would have
-    # called all 43 of these "still on the water" when they'd physically
-    # already reached port.
+    # port_eta and location_eta are NOT interchangeable — they measure two
+    # different, sequential milestones. Confirmed against real data: for
+    # every SIPL where both are populated (205 of 225), location_eta is
+    # ALWAYS >= port_eta (average gap ~7 days) — port_eta is arrival at the
+    # US port; location_eta is arrival at the final branch, which happens
+    # later, after customs clearance and drayage. Also confirmed the two
+    # fields are blank/populated in perfect lockstep (0 rows have one
+    # without the other), so there is no case where one usefully substitutes
+    # for the other — each is checked for its own specific milestone below,
+    # not coalesced together.
     #
-    # Symmetrically: when NEITHER port_eta nor location_eta is available,
-    # we do NOT fall back to assuming "still on water" just because status
-    # isn't "At branch" either — that repeats the exact mistake this logic
-    # exists to avoid. No ETA data means the arrival state is genuinely
-    # unknown, full stop. Verified against real data: 20 SIPLs have no
-    # port_eta AND no location_eta at all.
-    sipl_summary["port_or_location_eta"] = sipl_summary["port_eta"].fillna(sipl_summary["location_eta"])
-
-    # Five-way physical-location model (distinct from sipl_status, which
-    # tracks paperwork stage, not physical position):
-    #   Not Yet Sailed              -> hasn't departed origin
-    #   On the Water                -> departed, port/location ETA is still
-    #                                  ahead (or exactly today — "arriving
-    #                                  today" isn't "already arrived")
-    #   Arrived, Processing         -> departed AND past port/location ETA,
-    #                                  but not yet "At branch" (physically
-    #                                  at port/in transit to branch, going
-    #                                  through customs/drayage)
-    #   Delivered (At Branch)       -> sipl_status confirms arrival
-    #   Cannot Determine (No Detail)   -> no inventory detail, no B/L date
-    #   Cannot Determine (No ETA Data) -> sailed, but neither port_eta nor
-    #                                     location_eta exists to judge arrival
+    # "Has arrived at PORT" uses port_eta specifically, NOT sipl_status —
+    # status is a manually-updated workflow field that can lag behind
+    # physical reality by days. Verified: 36 SIPLs had already passed their
+    # own port_eta (some by over a week) while still showing "D.O.s
+    # Received" / "Scheduled for Delivery" / "On Hold" — none "At branch" —
+    # so checking status alone would have called all 36 of these "still on
+    # the water" when they'd physically already reached port.
+    #
+    # "Has reached the BRANCH" uses EITHER sipl_status == "At branch" OR a
+    # passed location_eta — same not-trusting-status-alone principle applied
+    # to the delivery milestone. Verified: 3 SIPLs have already passed both
+    # port_eta and location_eta while still showing "SIPL Ready" (the
+    # earliest status) — these turned out to be the same 3 SIPLs already
+    # flagged as date anomalies (ETA before ship date) in merged_detail, not
+    # a genuine gap, but the logic itself is correct to have regardless.
+    #
+    # When port_eta is missing, the arrival state is genuinely unknown —
+    # NOT assumed "still on water" just because status isn't "At branch"
+    # either, which would repeat the exact mistake this logic exists to
+    # avoid. Verified: 20 SIPLs have no port_eta (and, per the lockstep
+    # finding above, no location_eta either).
     def _physical_status(row):
         if row["sailing_status"] == "Cannot Determine (No Detail)":
             return "Cannot Determine (No Detail)"
@@ -1228,9 +1233,11 @@ def merge_sipl_inventory(sipl_clean, inventory_clean):
             return "Not Yet Sailed"
         if row["sipl_status"] == "At branch":
             return "Delivered (At Branch)"
-        if pd.isna(row["port_or_location_eta"]):
+        if pd.notna(row["location_eta"]) and row["location_eta"] < today:
+            return "Delivered (At Branch)"
+        if pd.isna(row["port_eta"]):
             return "Cannot Determine (No ETA Data)"
-        return "Arrived, Processing" if row["port_or_location_eta"] < today else "On the Water"
+        return "Arrived, Processing" if row["port_eta"] < today else "On the Water"
 
     sipl_summary["physical_status"] = sipl_summary.apply(_physical_status, axis=1)
     sipl_summary["is_currently_on_water"] = sipl_summary["physical_status"] == "On the Water"
