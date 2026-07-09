@@ -1100,15 +1100,21 @@ def merge_sipl_inventory(sipl_clean, inventory_clean):
             undetailed SIPLs. Includes 'sailing_status' (has it sailed at
             all — "On the Water", "Not Yet Sailed", or "Cannot Determine
             (No Detail)") and the more precise 'physical_status', a
-            four-way model of where the SIPL physically is RIGHT NOW,
+            six-way model of where the SIPL physically is RIGHT NOW,
             derived from dates (port_eta/location_eta), not from
             sipl_status alone (which is a manually-updated paperwork field
             that can lag physical reality by days): "Not Yet Sailed", "On
-            the Water" (departed, hasn't reached port_eta), "Arrived,
-            Processing" (past port_eta but not yet "At branch" — physically
-            at port/in customs/awaiting drayage), "Delivered (At Branch)",
-            or "Cannot Determine (No Detail)". 'is_currently_on_water' is
-            True only for the "On the Water" physical_status bucket.
+            the Water" (departed, port/location ETA still ahead or exactly
+            today), "Arrived, Processing" (past ETA but not yet "At
+            branch" — physically at port/in customs/awaiting drayage),
+            "Delivered (At Branch)", "Cannot Determine (No Detail)" (no
+            inventory match, no B/L date to check), or "Cannot Determine
+            (No ETA Data)" (sailed, but neither port_eta nor location_eta
+            exists — genuinely unknown whether it's arrived, NOT assumed
+            still on water just because status isn't "At branch" either —
+            that would repeat the same status-can't-be-trusted mistake this
+            whole model exists to avoid). 'is_currently_on_water' is True
+            only for the "On the Water" physical_status bucket.
           - 'container_consolidation': one row per container, with # of
             distinct SIPLs sharing it, total value, and a routing-
             consistency flag (ship_to/arrival_port/departure_port nunique
@@ -1154,33 +1160,38 @@ def merge_sipl_inventory(sipl_clean, inventory_clean):
 
     sipl_summary["sailing_status"] = sipl_summary.apply(_sailing_status, axis=1)
 
-    # "Has arrived at port" must be determined from a real date (port_eta,
+    # "Has arrived at port" is determined from a real date (port_eta,
     # falling back to location_eta when port_eta is blank), NOT from
-    # sipl_status alone — status is a manually-updated workflow field that
-    # can lag behind physical reality by days, while port_eta is a
-    # forecast/actual date that moves independently. Verified against real
-    # data: 43 SIPLs had already passed their own port_eta (some by over a
-    # week) while still showing "D.O.s Received" / "Scheduled for Delivery"
-    # / "On Hold" — none of them "At branch" — so checking status alone
-    # would have called all 43 of these "still on the water" when they'd
-    # physically already reached port.
+    # sipl_status — status is a manually-updated workflow field that can lag
+    # behind physical reality by days. Verified against real data: 43 SIPLs
+    # had already passed their own port_eta (some by over a week) while
+    # still showing "D.O.s Received" / "Scheduled for Delivery" / "On Hold"
+    # — none of them "At branch" — so checking status alone would have
+    # called all 43 of these "still on the water" when they'd physically
+    # already reached port.
+    #
+    # Symmetrically: when NEITHER port_eta nor location_eta is available,
+    # we do NOT fall back to assuming "still on water" just because status
+    # isn't "At branch" either — that repeats the exact mistake this logic
+    # exists to avoid. No ETA data means the arrival state is genuinely
+    # unknown, full stop. Verified against real data: 20 SIPLs have no
+    # port_eta AND no location_eta at all.
     sipl_summary["port_or_location_eta"] = sipl_summary["port_eta"].fillna(sipl_summary["location_eta"])
-    has_known_eta = sipl_summary["port_or_location_eta"].notna()
-    sipl_summary["has_arrived_at_port"] = np.where(
-        has_known_eta,
-        sipl_summary["port_or_location_eta"] < today,
-        sipl_summary["sipl_status"] == "At branch",  # fallback only when no ETA date exists at all
-    )
 
-    # Four-way physical-location model (distinct from sipl_status, which
+    # Five-way physical-location model (distinct from sipl_status, which
     # tracks paperwork stage, not physical position):
-    #   Not Yet Sailed        -> hasn't departed origin
-    #   On the Water          -> departed, hasn't reached port_eta yet
-    #   Arrived, Processing   -> departed AND past port_eta, but not yet
-    #                            "At branch" (physically at port/in transit
-    #                            to branch, going through customs/drayage)
-    #   Delivered (At Branch) -> sipl_status says "At branch"
-    #   Cannot Determine      -> no inventory detail, no B/L date to check
+    #   Not Yet Sailed              -> hasn't departed origin
+    #   On the Water                -> departed, port/location ETA is still
+    #                                  ahead (or exactly today — "arriving
+    #                                  today" isn't "already arrived")
+    #   Arrived, Processing         -> departed AND past port/location ETA,
+    #                                  but not yet "At branch" (physically
+    #                                  at port/in transit to branch, going
+    #                                  through customs/drayage)
+    #   Delivered (At Branch)       -> sipl_status confirms arrival
+    #   Cannot Determine (No Detail)   -> no inventory detail, no B/L date
+    #   Cannot Determine (No ETA Data) -> sailed, but neither port_eta nor
+    #                                     location_eta exists to judge arrival
     def _physical_status(row):
         if row["sailing_status"] == "Cannot Determine (No Detail)":
             return "Cannot Determine (No Detail)"
@@ -1188,9 +1199,9 @@ def merge_sipl_inventory(sipl_clean, inventory_clean):
             return "Not Yet Sailed"
         if row["sipl_status"] == "At branch":
             return "Delivered (At Branch)"
-        if row["has_arrived_at_port"]:
-            return "Arrived, Processing"
-        return "On the Water"
+        if pd.isna(row["port_or_location_eta"]):
+            return "Cannot Determine (No ETA Data)"
+        return "Arrived, Processing" if row["port_or_location_eta"] < today else "On the Water"
 
     sipl_summary["physical_status"] = sipl_summary.apply(_physical_status, axis=1)
     sipl_summary["is_currently_on_water"] = sipl_summary["physical_status"] == "On the Water"

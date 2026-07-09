@@ -80,24 +80,28 @@ def render_tab():
         by days. This view instead uses **dates** to determine physical
         location: `ship_b_l_date` (has it departed?) and `port_eta` (has it
         reached port yet?), falling back to `location_eta` only when
-        `port_eta` is blank.
+        `port_eta` is blank — and if **neither** date exists, that's reported
+        as genuinely unknown rather than assumed either way.
 
-        This matters: checking the data directly found **36 shipments that
-        have already passed their own port ETA** — some by over a week —
-        while still showing statuses like "D.O.s Received" or "On Hold," none
-        marked "At branch." Those containers have physically arrived at port
-        and are in customs/drayage processing — genuinely not "on the water"
-        anymore, but not yet delivered either. Status alone would have missed
-        this; the dates catch it.
+        This matters both ways: checking the data directly found **36
+        shipments that have already passed their own port ETA** — some by
+        over a week — while still showing statuses like "D.O.s Received" or
+        "On Hold," none marked "At branch." It also found **20 shipments with
+        no port or location ETA at all** — these were previously being
+        defaulted to "on the water" just because status wasn't "At branch,"
+        which is the same unreliable-status problem in the other direction.
+        Both are now called out explicitly instead of silently folded into
+        "on the water."
         """
     )
 
-    physical_counts = summary["physical_status"].value_counts()
     on_water_now = summary[summary["physical_status"] == "On the Water"]
     arrived_processing = summary[summary["physical_status"] == "Arrived, Processing"]
     delivered = summary[summary["physical_status"] == "Delivered (At Branch)"]
     not_yet_sailed = summary[summary["physical_status"] == "Not Yet Sailed"]
-    cannot_determine = summary[summary["physical_status"] == "Cannot Determine (No Detail)"]
+    cannot_determine_no_detail = summary[summary["physical_status"] == "Cannot Determine (No Detail)"]
+    cannot_determine_no_eta = summary[summary["physical_status"] == "Cannot Determine (No ETA Data)"]
+    cannot_determine_total = len(cannot_determine_no_detail) + len(cannot_determine_no_eta)
 
     col1, col2, col3, col4, col5 = st.columns(5)
     with col1:
@@ -109,7 +113,7 @@ def render_tab():
     with col4:
         st.metric("Not Yet Sailed", len(not_yet_sailed))
     with col5:
-        st.metric("Cannot Determine", len(cannot_determine))
+        st.metric("Cannot Determine", cannot_determine_total)
 
     on_water_value = on_water_now["total_value"].sum()
     all_in_transit_value = summary["total_value"].sum()
@@ -118,7 +122,7 @@ def render_tab():
         f"right now — still sailing, hasn't reached port yet. This is narrower "
         f"than the full **${all_in_transit_value:,.0f}** in-transit total (which "
         f"also includes shipments still awaiting booking, already at port "
-        f"clearing customs, and already delivered)."
+        f"clearing customs, already delivered, or with no date to judge)."
     )
 
     if len(arrived_processing) > 0:
@@ -140,12 +144,20 @@ def render_tab():
         ].rename(columns={"port_or_location_eta": "port_eta_was"}).sort_values("port_eta_was")
         st.dataframe(processing_display, use_container_width=True, hide_index=True)
 
-    if len(cannot_determine) > 0:
-        st.caption(
-            f"📌 {len(cannot_determine)} shipment(s) have no inventory detail record, "
-            "so there's no Bill of Lading date to check — genuinely unknown, not "
-            "assumed either way."
-        )
+    if cannot_determine_total > 0:
+        with st.expander(f"See the {cannot_determine_total} shipments with an unknown physical location"):
+            if len(cannot_determine_no_detail) > 0:
+                st.markdown(f"**{len(cannot_determine_no_detail)} — no inventory detail record** (no Bill of Lading date to check whether they've even sailed):")
+                st.dataframe(
+                    cannot_determine_no_detail[["sipl", "container", "supplier", "sipl_status"]],
+                    use_container_width=True, hide_index=True
+                )
+            if len(cannot_determine_no_eta) > 0:
+                st.markdown(f"**{len(cannot_determine_no_eta)} — sailed, but no port or location ETA on file** (can't tell if arrived):")
+                st.dataframe(
+                    cannot_determine_no_eta[["sipl", "container", "supplier", "ship_b_l_date", "total_value", "sipl_status"]],
+                    use_container_width=True, hide_index=True
+                )
 
     # =========================================================================
     # VIEW 1: VALUE AT RISK (LFD reframed by dollars, not just count)
