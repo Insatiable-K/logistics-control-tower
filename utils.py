@@ -711,8 +711,101 @@ def build_container_ledger(bills_clean, gl_clean, start, end):
     matched_gl_invoices = set(matched_detail["invoice"].dropna().unique())
     unmatched_gl = matchable_gl[~matchable_gl["invoice"].isin(matched_gl_invoices)]
 
+    # ---- Pending/placeholder bills, at row level ----
+    # A pending bill still has a known container (Bills always carries one)
+    # even though it can't be matched to GL by invoice number. These must
+    # stay visible — "doesn't match GL" is not the same as "unknown" or
+    # "excluded". Surfaced separately so the dashboard can show exactly
+    # which bill is pending for which container, not just a count.
+    pending_bill_detail = bills_window[~bills_window["is_matchable"]][
+        ["container", "sipl_inv", "bill_inv", "non_inventory_vendor", "amount", "invoice_dt"]
+    ].copy()
+
     return {
         "container_ledger": container_ledger,
         "matched_detail": matched_detail,
         "unmatched_gl": unmatched_gl,
+        "pending_bill_detail": pending_bill_detail,
+    }
+
+
+# =============================================================================
+# SINGLE-CONTAINER LOOKUP (search feature)
+# =============================================================================
+# Full-history detail for one container — deliberately NOT limited to the
+# operational window used by build_container_ledger(), since a manager
+# searching a specific container wants the complete picture (every SIPL,
+# every bill, ever), not just recent activity.
+
+def get_container_detail(container_id, bills_clean, gl_clean):
+    """
+    Look up full-history detail for a single container.
+
+    Args:
+        container_id: exact container ID to look up (case-sensitive, as
+                       stored — caller should uppercase/strip user input first)
+        bills_clean: output of clean_bills_dataframe() (first tuple element)
+        gl_clean: output of clean_gl_dataframe()
+
+    Returns:
+        dict with keys:
+          - 'found': bool — whether any bills exist for this container
+          - 'sipl_list': sorted list of unique SIPL numbers tied to this container
+          - 'bill_count', 'pending_count', 'matched_count': int summary counts
+          - 'total_billed', 'total_gl_confirmed', 'gl_coverage_pct': float
+          - 'bills_detail': DataFrame, one row per bill, with a 'status'
+            column ('Confirmed' / 'Pending' / 'Awaiting GL Match')
+          - 'category_breakdown': dict of category -> $ (from matched GL only)
+          - 'vendors': sorted list of unique vendor names
+    """
+    container_bills = bills_clean[bills_clean["container"] == container_id].copy()
+
+    if container_bills.empty:
+        return {"found": False, "container": container_id}
+
+    container_bills["is_matchable"] = ~(container_bills["is_pending_literal"] | container_bills["is_placeholder_junk"])
+
+    gl_matchable = gl_clean[~(is_pending(gl_clean["invoice"]) | is_junk_invoice(gl_clean["invoice"]))]
+    matched = container_bills[container_bills["is_matchable"]].merge(
+        gl_matchable, left_on="bill_inv", right_on="invoice", how="inner", suffixes=("_bill", "_gl")
+    )
+
+    # Per-bill status for the detail table
+    matched_invoices = set(matched["bill_inv"].unique())
+
+    def _status(row):
+        if row["is_pending_literal"] or row["is_placeholder_junk"]:
+            return "Pending"
+        if row["bill_inv"] in matched_invoices:
+            return "Confirmed"
+        return "Awaiting GL Match"
+
+    container_bills["status"] = container_bills.apply(_status, axis=1)
+
+    total_billed = container_bills["amount"].sum()
+    total_gl_confirmed = matched["net_amount"].sum()
+    gl_coverage_pct = 100 * total_gl_confirmed / total_billed if total_billed > 0 else 0
+
+    category_breakdown = matched.groupby("category")["net_amount"].sum().to_dict() if len(matched) > 0 else {}
+
+    vendors = sorted(set(container_bills["non_inventory_vendor"].dropna().astype(str)))
+    sipl_list = sorted(set(container_bills["sipl_inv"].dropna().astype(str)))
+
+    return {
+        "found": True,
+        "container": container_id,
+        "sipl_list": sipl_list,
+        "sipl_count": len(sipl_list),
+        "bill_count": len(container_bills),
+        "pending_count": int((container_bills["status"] == "Pending").sum()),
+        "matched_count": int((container_bills["status"] == "Confirmed").sum()),
+        "awaiting_count": int((container_bills["status"] == "Awaiting GL Match").sum()),
+        "total_billed": total_billed,
+        "total_gl_confirmed": total_gl_confirmed,
+        "gl_coverage_pct": gl_coverage_pct,
+        "bills_detail": container_bills[
+            ["bill_inv", "sipl_inv", "non_inventory_vendor", "amount", "invoice_dt", "status"]
+        ].sort_values("invoice_dt", ascending=False),
+        "category_breakdown": category_breakdown,
+        "vendors": vendors,
     }
