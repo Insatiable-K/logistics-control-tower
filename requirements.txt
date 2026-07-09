@@ -5,3 +5,4 @@ openpyxl
 altair
 python-dateutil
 rapidfuzz
+lxml
