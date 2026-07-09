@@ -92,7 +92,16 @@ def render_tab():
         of total dollar value**, confirming it was mostly low-value noise, not
         meaningful freight.
 
-        **{cleaned_rows:,} product line items**, covering **{inv_df['sipl'].nunique():,} shipments**.
+        **{cleaned_rows:,} product line items**, covering
+        **{inv_df['sipl'].nunique():,} SIPL bookings** on
+        **{inv_df['container'].nunique():,} physical containers**.
+
+        ℹ️ Note: unlike the other tabs, this view stays at the **product line
+        item** level throughout — a single container legitimately carries many
+        different products (avg {len(inv_df)/inv_df['container'].nunique():.1f}
+        line items per container), so "what's inside" is inherently a
+        line-item question, not a container-count one. Dollar totals below are
+        summed and don't depend on grain either way.
         """
     )
 
@@ -237,7 +246,11 @@ def render_tab():
             mime="text/csv", key="inventory_export_download"
         )
 
-    st.caption(f"Generated {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | {cleaned_rows:,} line items | ${total_value:,.0f} total value")
+    st.caption(
+        f"Generated {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | "
+        f"{inv_df['container'].nunique():,} containers | {cleaned_rows:,} line items | "
+        f"${total_value:,.0f} total value"
+    )
 
 
 if __name__ == "__main__":

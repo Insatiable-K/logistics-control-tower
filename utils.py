@@ -979,6 +979,57 @@ def clean_in_transit_dataframe(raw):
 
 
 # =============================================================================
+# SIPL -> CONTAINER ROLLUP (standalone, no Inventory Detail merge needed)
+# =============================================================================
+# A container routinely carries multiple SIPLs (avg 1.81, confirmed against
+# real data), so any COUNT-based view built directly on sipl_clean (pipeline
+# funnel, LFD risk, freight forwarder concentration, sourcing/destination
+# breakdowns) inflates relative to physical container counts. Verified: the
+# "Scheduled for Delivery" stage shows 12 SIPLs but only 2 containers — a 6x
+# inflation. This rollup is the container-level source of truth for
+# in_transit_insights.py, mirroring container_consolidation in
+# merge_sipl_inventory() but usable without the Inventory Detail file.
+
+def build_sipl_container_rollup(sipl_clean):
+    """
+    One row per container, rolled up from the SIPL tracking list alone.
+
+    Fields that are physical facts about the container (sipl_status, lfd,
+    fr_forwarder, departure_port, ship_to_location) are deduplicated across
+    sibling SIPLs sharing that container, with a `has_mixed_*`/
+    `is_routing_consistent` flag raised whenever siblings genuinely
+    disagree (verified real data: 0 mixed status, 1 mixed forwarder, 1
+    routing-inconsistent container out of 124 — so this is rare, not the
+    common case, but must be surfaced rather than silently picked).
+    `sipl_age_days` uses the oldest (max) sibling, since that's the
+    actionable "how long has any part of this container's process been
+    open" signal.
+    """
+    g = sipl_clean.groupby("container")
+    rollup = g.agg(
+        sipl_count=("sipl", "nunique"),
+        sipls=("sipl", lambda s: sorted(s.astype(str).unique())),
+        status_nunique=("sipl_status", lambda s: s.dropna().nunique()),
+        sipl_status=("sipl_status", lambda s: s.dropna().iloc[0] if s.dropna().size else "Unknown"),
+        has_lfd=("has_lfd", "any"),
+        lfd=("lfd", "min"),
+        ff_nunique=("fr_forwarder", lambda s: s.dropna().nunique()),
+        fr_forwarder=("fr_forwarder", lambda s: s.dropna().iloc[0] if s.dropna().size else None),
+        dp_nunique=("departure_port", lambda s: s.dropna().nunique()),
+        departure_port=("departure_port", lambda s: s.dropna().iloc[0] if s.dropna().size else None),
+        st_nunique=("ship_to_location", lambda s: s.dropna().nunique()),
+        ship_to_location=("ship_to_location", lambda s: s.dropna().iloc[0] if s.dropna().size else None),
+        sipl_age_days=("sipl_age_days", "max"),
+    ).reset_index()
+
+    rollup["has_mixed_status"] = rollup["status_nunique"] > 1
+    rollup["has_mixed_forwarder"] = rollup["ff_nunique"] > 1
+    rollup["is_routing_consistent"] = (rollup["dp_nunique"] <= 1) & (rollup["st_nunique"] <= 1)
+    rollup = rollup.drop(columns=["status_nunique", "ff_nunique", "dp_nunique", "st_nunique"])
+    return rollup
+
+
+# =============================================================================
 # INVENTORY IN TRANSIT - DETAIL — CLEANING PIPELINE
 # =============================================================================
 # Single source of truth for cleaning "Inventory In Transit - Detail.xls",

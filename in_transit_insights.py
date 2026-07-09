@@ -18,7 +18,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from utils import load_html_table, clean_in_transit_dataframe
+from utils import load_html_table, clean_in_transit_dataframe, build_sipl_container_rollup
 
 
 @st.cache_data
@@ -33,6 +33,7 @@ def render_tab():
     """Render the full In-Transit Insights view. Callable standalone or as a tab."""
 
     sipl_df, original_rows, cleaned_rows = load_and_clean_in_transit()
+    rollup = build_sipl_container_rollup(sipl_df)
 
     # =========================================================================
     # WHAT THIS SHOWS
@@ -50,7 +51,11 @@ def render_tab():
         with no ocean container — removed, since this view tracks container
         logistics specifically, not domestic freight.
 
-        **{cleaned_rows:,} container shipments remain in scope.**
+        **{cleaned_rows:,} SIPL bookings remain in scope, riding on
+        {rollup['container'].nunique():,} physical containers** (a container
+        routinely carries more than one SIPL — every view below leads with
+        the container count, since that's the physical unit that actually
+        moves; SIPL-level detail is available as drill-down).
         """
     )
 
@@ -90,11 +95,16 @@ def render_tab():
         "Freight Invoice Needed": "Invoice team hasn't linked a bill to this container yet — an internal delay, not a carrier/customs one.",
     }
 
-    status_counts = sipl_df["sipl_status"].value_counts()
+    # Container-level primary (rollup["sipl_status"] is deduplicated per
+    # container, with has_mixed_status flagging any real disagreement among
+    # siblings — verified 0 such cases in current data, but not assumed).
+    status_counts = rollup["sipl_status"].value_counts()
+    sipl_status_counts_raw = sipl_df["sipl_status"].value_counts()
     # Zero-filled (not dropna'd) — a stage showing 0 here is a real, worth-
     # reporting finding (e.g. "Need Documents" never has a container yet in
     # this data), not something to silently omit from the chart.
     pipeline_counts = status_counts.reindex(PIPELINE_ORDER).fillna(0).astype(int)
+    pipeline_sipl_counts = sipl_status_counts_raw.reindex(PIPELINE_ORDER).fillna(0).astype(int)
     exception_counts = status_counts.reindex(EXCEPTION_STATES).dropna().astype(int)
     other_labels = [s for s in status_counts.index if s not in PIPELINE_ORDER and s not in EXCEPTION_STATES]
     other_counts = status_counts.reindex(other_labels).dropna().astype(int) if other_labels else pd.Series(dtype=int)
@@ -107,31 +117,48 @@ def render_tab():
             "with no container yet assigned, not a data gap."
         )
 
+    mixed_status_containers = rollup[rollup["has_mixed_status"]]
+    if len(mixed_status_containers) > 0:
+        st.warning(
+            f"⚠️ **{len(mixed_status_containers)} container(s)** have sibling SIPLs "
+            "sitting at different pipeline stages — the chart below shows the "
+            "container once per stage its siblings disagree on. See the expander "
+            "below for the breakdown."
+        )
+        with st.expander(f"See the {len(mixed_status_containers)} mixed-status containers"):
+            for _, row in mixed_status_containers.iterrows():
+                sibling_detail = sipl_df[sipl_df["container"] == row["container"]][["sipl", "sipl_status"]]
+                st.write(f"**{row['container']}**")
+                st.dataframe(sibling_detail, use_container_width=True, hide_index=True)
+
     col1, col2 = st.columns([2, 1])
     with col1:
         fig = px.bar(
             x=pipeline_counts.values, y=pipeline_counts.index, orientation="h",
-            title="Shipments by Pipeline Stage (in process order)",
-            labels={"x": "# Shipments", "y": "Stage"}
+            title="Containers by Pipeline Stage (in process order)",
+            labels={"x": "# Containers", "y": "Stage"}
         )
         fig.update_yaxes(categoryorder="array", categoryarray=list(reversed(PIPELINE_ORDER)))
         st.plotly_chart(fig, use_container_width=True)
     with col2:
-        st.markdown("**Pipeline stage counts:**")
+        st.markdown("**Pipeline stage counts (containers):**")
         for stage in PIPELINE_ORDER:
             count = int(pipeline_counts.get(stage, 0))
-            pct = 100 * count / len(sipl_df)
-            st.write(f"- **{stage}**: {count} ({pct:.0f}%)")
+            sipl_count = int(pipeline_sipl_counts.get(stage, 0))
+            pct = 100 * count / len(rollup) if len(rollup) > 0 else 0
+            st.write(f"- **{stage}**: {count} containers ({pct:.0f}%)", help=f"{sipl_count} SIPL booking(s)")
             st.caption(STAGE_DESCRIPTIONS[stage])
 
-    sipl_ready_count = int(pipeline_counts.get("SIPL Ready", 0))
+    sipl_ready_containers = int(pipeline_counts.get("SIPL Ready", 0))
+    sipl_ready_sipls = int(pipeline_sipl_counts.get("SIPL Ready", 0))
     st.info(
         f"ℹ️ **\"SIPL Ready\" note**: this one status label actually covers two "
         f"different real states — ready to sail (not yet departed) and already "
-        f"sailed / on the water. The **{sipl_ready_count}** shipments shown here "
-        f"under SIPL Ready are a mix of both. See the **🔗 Shipment Insights** tab "
-        f"for the \"Currently On the Water\" view, which splits this out using "
-        f"each shipment's Bill of Lading date."
+        f"sailed / on the water. The **{sipl_ready_containers} containers** "
+        f"({sipl_ready_sipls} SIPL bookings) shown here under SIPL Ready are a "
+        f"mix of both. See the **🔗 Shipment Insights** tab for the "
+        f"\"Currently On the Water\" view, which splits this out using each "
+        f"shipment's Bill of Lading date."
     )
 
     if len(exception_counts) > 0 or len(EXCEPTION_STATES) > 0:
@@ -141,7 +168,7 @@ def render_tab():
             count = int(exception_counts.get(stage, 0))
             if count > 0:
                 any_exceptions = True
-                st.write(f"- **{stage}**: {count}")
+                st.write(f"- **{stage}**: {count} containers")
                 st.caption(EXCEPTION_DESCRIPTIONS[stage])
         if not any_exceptions:
             st.write("None of these currently active in this window.")
@@ -149,15 +176,19 @@ def render_tab():
     if len(other_counts) > 0:
         st.markdown("**Other / unrecognized statuses:**")
         for stage, count in other_counts.items():
-            st.write(f"- **{stage}**: {count}")
+            st.write(f"- **{stage}**: {count} containers")
 
-    st.markdown("**Coarse status (2-value summary):**")
+    st.markdown("**Coarse status (2-value summary, SIPL bookings):**")
     coarse = sipl_df["status"].value_counts()
     col1, col2 = st.columns(2)
     with col1:
         st.metric("In Transit", int(coarse.get("INTRANSIT", 0)))
     with col2:
         st.metric("ONSO Reduced", int(coarse.get("ONSO Reduced", 0)))
+    st.caption(
+        "📌 Shown at SIPL-booking grain, not container grain — this is a "
+        "coarse system status per booking, not a physical container fact."
+    )
 
     # =========================================================================
     # LFD RISK — the most actionable finding in this file
@@ -165,28 +196,34 @@ def render_tab():
     st.divider()
     st.markdown("### 🔴 Demurrage Risk: Last Free Day (LFD) Tracking")
 
-    has_lfd = sipl_df["has_lfd"].sum()
-    missing_lfd = len(sipl_df) - has_lfd
-    missing_pct = 100 * missing_lfd / len(sipl_df)
+    # LFD is a physical fact about the container (one pickup deadline per
+    # container at port), not a per-SIPL fact — verified 0 containers have
+    # conflicting has_lfd values across sibling SIPLs, so the rollup is an
+    # exact dedup, not an approximation.
+    has_lfd_containers = int(rollup["has_lfd"].sum())
+    missing_lfd_containers = len(rollup) - has_lfd_containers
+    missing_pct = 100 * missing_lfd_containers / len(rollup) if len(rollup) > 0 else 0
+    missing_lfd_sipls = int((~sipl_df["has_lfd"]).sum())
 
     st.error(
         f"""
-        **{missing_lfd} of {len(sipl_df)} shipments ({missing_pct:.0f}%) have no
-        Last Free Day (LFD) on file.**
+        **{missing_lfd_containers} of {len(rollup)} containers ({missing_pct:.0f}%)
+        have no Last Free Day (LFD) on file** ({missing_lfd_sipls} SIPL bookings
+        affected).
 
         💡 **Why this matters**: LFD is the deadline to pick up a container from
         port before daily storage/demurrage fees start accruing — it's the single
-        most financially risky date in ocean freight. A shipment with no LFD on
+        most financially risky date in ocean freight. A container with no LFD on
         file isn't necessarily late, but it also isn't being actively monitored
         for this specific risk. Worth confirming whether LFD tracking happens
         elsewhere, or whether this is a real process gap.
         """
     )
 
-    if has_lfd > 0:
-        with st.expander(f"See the {has_lfd} shipments that DO have an LFD on file"):
-            lfd_df = sipl_df[sipl_df["has_lfd"]][
-                ["sipl", "container", "lfd", "sipl_status", "supplier"]
+    if has_lfd_containers > 0:
+        with st.expander(f"See the {has_lfd_containers} containers that DO have an LFD on file"):
+            lfd_df = rollup[rollup["has_lfd"]][
+                ["container", "lfd", "sipl_status", "sipl_count"]
             ].sort_values("lfd")
             st.dataframe(lfd_df, use_container_width=True, hide_index=True)
 
@@ -194,46 +231,54 @@ def render_tab():
     # SIPL AGE — how long has this been sitting
     # =========================================================================
     st.divider()
-    st.markdown("### ⏱️ Shipment Age (Days Since Initiated)")
+    st.markdown("### ⏱️ Container Age (Days Since Oldest SIPL Was Initiated)")
 
     st.markdown(
         f"""
-        **Average age: {sipl_df['sipl_age_days'].mean():.0f} days** |
-        **Median: {sipl_df['sipl_age_days'].median():.0f} days**
+        **Average age: {rollup['sipl_age_days'].mean():.0f} days** |
+        **Median: {rollup['sipl_age_days'].median():.0f} days**
 
-        A shipment stuck at an early pipeline stage for a long time is worth a
-        second look — the table below cross-references age against pipeline
-        stage to surface exactly that.
+        Age is measured per container, using the **oldest** SIPL booking
+        riding on it (a container consolidating several SIPLs is only as
+        "fresh" as its longest-waiting booking). A container stuck at an
+        early pipeline stage for a long time is worth a second look — the
+        table below cross-references age against pipeline stage to surface
+        exactly that; per-SIPL detail is one click away.
         """
     )
 
-    future_dated = (sipl_df["sipl_age_days"] < 0).sum()
+    future_dated = (rollup["sipl_age_days"] < 0).sum()
     if future_dated > 0:
         st.info(
-            f"ℹ️ **{future_dated} shipment(s) show a negative age** — meaning their "
-            "'initiated' date is technically in the future. Likely a forward-dated "
-            "entry or clock skew in the source system, not a real error, but flagged "
-            "for completeness."
+            f"ℹ️ **{future_dated} container(s) show a negative age** — meaning "
+            "their oldest SIPL's 'initiated' date is technically in the future. "
+            "Likely a forward-dated entry or clock skew in the source system, "
+            "not a real error, but flagged for completeness."
         )
 
     col1, col2 = st.columns(2)
     with col1:
         fig = px.histogram(
-            sipl_df, x="sipl_age_days", nbins=40,
-            title="Distribution of Shipment Age",
-            labels={"sipl_age_days": "Days Since Initiated", "count": "# Shipments"}
+            rollup, x="sipl_age_days", nbins=40,
+            title="Distribution of Container Age",
+            labels={"sipl_age_days": "Days Since Oldest SIPL Initiated", "count": "# Containers"}
         )
         st.plotly_chart(fig, use_container_width=True)
 
     with col2:
-        st.markdown("**Oldest shipments still active, by stage:**")
-        stale = sipl_df[sipl_df["sipl_age_days"] >= 60].sort_values("sipl_age_days", ascending=False)
-        st.write(f"{len(stale)} shipments have been open 60+ days")
+        st.markdown("**Oldest containers still active, by stage:**")
+        stale = rollup[rollup["sipl_age_days"] >= 60].sort_values("sipl_age_days", ascending=False)
+        st.write(f"{len(stale)} containers have been open 60+ days")
         if len(stale) > 0:
             st.dataframe(
-                stale[["sipl", "sipl_status", "sipl_age_days", "supplier"]].head(15),
+                stale[["container", "sipl_status", "sipl_age_days", "sipl_count"]].head(15),
                 use_container_width=True, hide_index=True
             )
+            with st.expander("See SIPL-level detail for these stale containers"):
+                stale_sipls = sipl_df[sipl_df["container"].isin(stale["container"])][
+                    ["sipl", "container", "sipl_status", "sipl_age_days", "supplier"]
+                ].sort_values("sipl_age_days", ascending=False)
+                st.dataframe(stale_sipls, use_container_width=True, hide_index=True)
 
     # =========================================================================
     # FREIGHT FORWARDER CONCENTRATION
@@ -241,20 +286,27 @@ def render_tab():
     st.divider()
     st.markdown("### 🏢 Freight Forwarder Concentration")
 
-    ff = sipl_df[sipl_df["fr_forwarder"].notna() & (sipl_df["fr_forwarder"] != "")]["fr_forwarder"]
+    ff = rollup[rollup["fr_forwarder"].notna() & (rollup["fr_forwarder"] != "")]["fr_forwarder"]
+    mixed_ff_count = int(rollup["has_mixed_forwarder"].sum())
     if len(ff) > 0:
         ff_counts = ff.value_counts()
         st.markdown(
             f"""
-            **{len(ff)} of {len(sipl_df)} shipments** ({100*len(ff)/len(sipl_df):.0f}%) have a
+            **{len(ff)} of {len(rollup)} containers** ({100*len(ff)/len(rollup):.0f}%) have a
             freight forwarder on file. Of those, the top 3 handle
             **{100*ff_counts.head(3).sum()/len(ff):.0f}%** of the volume — a real
             concentration worth knowing about for negotiating leverage and
             single-vendor risk.
             """
         )
+        if mixed_ff_count > 0:
+            st.caption(
+                f"📌 {mixed_ff_count} container(s) have more than one freight "
+                "forwarder among their sibling SIPLs — counted here under the "
+                "first forwarder on file."
+            )
         fig = px.bar(x=ff_counts.values, y=ff_counts.index, orientation="h",
-                     title="Shipments by Freight Forwarder")
+                     title="Containers by Freight Forwarder")
         st.plotly_chart(fig, use_container_width=True)
 
     # =========================================================================
@@ -263,15 +315,15 @@ def render_tab():
     st.divider()
     st.markdown("### 🌍 Global Sourcing Footprint")
 
-    dp = sipl_df[sipl_df["departure_port"].notna() & (sipl_df["departure_port"] != "")]["departure_port"]
+    dp = rollup[rollup["departure_port"].notna() & (rollup["departure_port"] != "")]["departure_port"]
     if len(dp) > 0:
         dp_counts = dp.value_counts()
         st.markdown(
-            f"Of the **{len(dp)} shipments** with a known departure port, "
+            f"Of the **{len(dp)} containers** with a known departure port, "
             f"here's where they're coming from:"
         )
         fig = px.bar(x=dp_counts.values, y=dp_counts.index, orientation="h",
-                     title="Shipments by Departure Port")
+                     title="Containers by Departure Port")
         st.plotly_chart(fig, use_container_width=True)
         st.caption("📌 Port codes include the country — a real global sourcing network across multiple continents.")
 
@@ -281,11 +333,18 @@ def render_tab():
     st.divider()
     st.markdown("### 📍 Where Is Inventory Headed? (Distribution Network)")
 
-    ship_to = sipl_df[sipl_df["ship_to_location"].notna() & (sipl_df["ship_to_location"] != "")]["ship_to_location"]
+    ship_to = rollup[rollup["ship_to_location"].notna() & (rollup["ship_to_location"] != "")]["ship_to_location"]
     top_ship_to = ship_to.value_counts().head(15)
     fig = px.bar(x=top_ship_to.values, y=top_ship_to.index, orientation="h",
-                 title="Top 15 Destinations by Shipment Count")
+                 title="Top 15 Destinations by Container Count")
     st.plotly_chart(fig, use_container_width=True)
+    if (~rollup["is_routing_consistent"]).sum() > 0:
+        st.caption(
+            f"📌 {(~rollup['is_routing_consistent']).sum()} container(s) show "
+            "more than one destination among sibling SIPLs (routing "
+            "inconsistency, usually container reuse) — counted here under the "
+            "first destination on file."
+        )
 
     # =========================================================================
     # DATA QUALITY
@@ -298,8 +357,8 @@ def render_tab():
         - **{removed:,} rows removed** during cleaning — all domestic truck/parcel
           shipments with no ocean container (out of scope for this view; see the
           "What This Data Represents" section above)
-        - **{missing_lfd} shipments ({missing_pct:.0f}%)** have no LFD — see the risk callout above
-        - **{future_dated} shipment(s)** show a negative age (future-dated initiation)
+        - **{missing_lfd_containers} containers ({missing_pct:.0f}%)** have no LFD — see the risk callout above
+        - **{future_dated} container(s)** show a negative age (future-dated initiation)
         """
     )
 
@@ -309,15 +368,28 @@ def render_tab():
     st.divider()
     st.markdown("### 📥 Download This Data")
 
-    if st.button("📊 Download Cleaned In-Transit List as CSV", key="in_transit_export_btn"):
-        csv = sipl_df.to_csv(index=False)
-        st.download_button(
-            label="Download CSV File", data=csv,
-            file_name=f"in_transit_cleaned_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-            mime="text/csv", key="in_transit_export_download"
-        )
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("📦 Download Container-Level Rollup as CSV", key="in_transit_container_export_btn"):
+            csv = rollup.drop(columns=["sipls"]).to_csv(index=False)
+            st.download_button(
+                label="Download CSV File", data=csv,
+                file_name=f"in_transit_containers_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                mime="text/csv", key="in_transit_container_export_download"
+            )
+    with col2:
+        if st.button("📊 Download Full SIPL Detail as CSV", key="in_transit_export_btn"):
+            csv = sipl_df.to_csv(index=False)
+            st.download_button(
+                label="Download CSV File", data=csv,
+                file_name=f"in_transit_cleaned_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                mime="text/csv", key="in_transit_export_download"
+            )
 
-    st.caption(f"Generated {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | {cleaned_rows:,} shipments tracked")
+    st.caption(
+        f"Generated {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | "
+        f"{rollup['container'].nunique():,} containers | {cleaned_rows:,} SIPL bookings tracked"
+    )
 
 
 if __name__ == "__main__":
