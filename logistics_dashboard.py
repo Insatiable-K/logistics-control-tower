@@ -1,12 +1,13 @@
 # -*- coding: utf-8 -*-
 """
 LOGISTICS INSIGHTS DASHBOARD
-Single entry point combining Bills, GL Accounting, Container, and In-Transit
-Insights as tabs. Run with: streamlit run logistics_dashboard.py
+Single entry point combining Bills, GL Accounting, Container, In-Transit,
+Inventory, and Shipment Insights as tabs. Run with:
+streamlit run logistics_dashboard.py
 
 Each tab's content also runs standalone via its own file (bills_insights.py,
 gl_insights.py, container_insights.py, in_transit_insights.py,
-inventory_detail_insights.py) if preferred.
+inventory_detail_insights.py, shipment_insights.py) if preferred.
 """
 
 import streamlit as st
@@ -20,6 +21,7 @@ import gl_insights
 import container_insights
 import in_transit_insights
 import inventory_detail_insights
+import shipment_insights
 
 st.set_page_config(page_title="Logistics Insights", layout="wide", initial_sidebar_state="collapsed")
 
@@ -30,12 +32,13 @@ st.markdown(
     unsafe_allow_html=True
 )
 
-tab_bills, tab_gl, tab_container, tab_in_transit, tab_inventory = st.tabs([
+tab_bills, tab_gl, tab_container, tab_in_transit, tab_inventory, tab_shipment = st.tabs([
     "📊 Bills Insights",
     "📈 GL Accounting Insights",
     "📦 Container Insights",
     "🚦 In-Transit Insights",
     "🏷️ Inventory In Transit Insights",
+    "🔗 Shipment Insights (Merged)",
 ])
 
 with tab_bills:
@@ -52,3 +55,6 @@ with tab_in_transit:
 
 with tab_inventory:
     inventory_detail_insights.render_tab()
+
+with tab_shipment:
+    shipment_insights.render_tab()
