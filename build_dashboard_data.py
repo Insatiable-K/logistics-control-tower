@@ -44,6 +44,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from utils import (
     load_html_table, standardize_columns, clean_currency, clean_date,
     clean_numeric, clean_text, clean_container, is_pending,
+    build_vendor_category_mapping,
 )
 
 # =============================================================================
@@ -451,103 +452,134 @@ print(f"  Breakdown by category:")
 print(gl_freight[gl_freight["category"].notna()]["category"].value_counts().to_string())
 
 # =============================================================================
-# STEP 6: BUILD INVOICE EVENTS (Confirmed + Inferred Pending)
+# STEP 6: CONSOLIDATE INVOICE COMPLIANCE WITH 3-LAYER PENDING INFERENCE
 # =============================================================================
-print("\n--- STEP 6: BUILD INVOICE EVENTS ---")
+print("\n--- STEP 6: BUILD CONSOLIDATED INVOICE COMPLIANCE ---")
 
-# Confirmed (non-pending) bills matched to GL
+# Layer 1: GL-confirmed matches
+print("  Layer 1: Building GL-confirmed matches...")
 confirmed_bills = matched_bills_df[~matched_bills_df["is_pending"]].copy()
 gl_matched = confirmed_bills.merge(
     gl_lookup, left_on="bill_inv", right_on="invoice", how="inner"
 )
-gl_matched = gl_matched.rename(columns={"bill_inv": "invoice_number", "invoice_dt": "invoice_date"})
-gl_matched["sipl"] = gl_matched["matched_sipl"]  # Use the matched SIPL from our matching logic
-gl_matched["source_tier"] = "GL_CONFIRMED"
-gl_matched["is_pending"] = False
+print(f"    GL-confirmed invoices: {len(gl_matched):,}")
 
-print(f"  GL-confirmed events: {len(gl_matched):,} of {len(confirmed_bills):,} confirmed bills")
+# Build confirmed events by (SIPL, category) — these are always Complete
+confirmed_events = gl_matched[['matched_sipl', 'category', 'party']].copy()
+confirmed_events.columns = ['sipl', 'category', 'vendor']
+confirmed_by_sipl_cat = (
+    confirmed_events.dropna(subset=['sipl', 'category'])
+    .drop_duplicates(subset=['sipl', 'category'])
+    .set_index(['sipl', 'category'])
+)
 
-# Pending bills (may have inferred category)
-pending_bills = matched_bills_df[matched_bills_df["is_pending"]].copy()
-pending_bills["invoice_number"] = pending_bills["bill_inv"]
-pending_bills["sipl"] = pending_bills["matched_sipl"]  # Use the matched SIPL from our matching logic
-pending_bills["category"] = None
-pending_bills["source_tier"] = "PENDING_UNATTRIBUTED"
-pending_bills["is_pending"] = True
+# Layer 2: Vendor-based pending inference
+print("  Layer 2: Building vendor->category mapping and fuzzy matching...")
+vendor_category_map = build_vendor_category_mapping(gl_freight, REQUIRED_CATEGORIES, threshold=0.90)
+print(f"    Vendor mappings built: {len(vendor_category_map)} vendors")
+unambiguous_vendors = sum(1 for v in vendor_category_map.values() if v != 'AMBIGUOUS_VENDOR')
+print(f"    Unambiguous vendors (>=90% single category): {unambiguous_vendors}")
 
-print(f"  Pending events (unattributed): {len(pending_bills):,}")
+# For fuzzy matching, prepare vendor names from both GL and bills
+from rapidfuzz import fuzz, process
+gl_vendors = list(vendor_category_map.keys())
 
-# Combine
-event_cols = ["container", "sipl", "category", "is_pending", "amount", "source_tier", "invoice_number"]
-invoice_events = pd.concat([
-    gl_matched[event_cols],
-    pending_bills[event_cols],
-], ignore_index=True)
-invoice_events = invoice_events[invoice_events["category"].notna() | invoice_events["is_pending"]].reset_index(drop=True)
+# Build set of invoices that matched GL Layer 1 (for Layer 2 exclusion)
+# Exclude literal "PENDING" placeholder from GL data — it shouldn't be treated as a real invoice match
+gl_invoice_set = set(gl_lookup[gl_lookup["invoice"] != "PENDING"]["invoice"].dropna().unique())
 
-print(f"  Total invoice events: {len(invoice_events):,}")
+# Layer 2: Bills matched to container/SIPL but NOT confirmed via GL Layer 1
+# This includes both literal "PENDING" placeholders AND real-but-not-yet-posted invoice numbers
+unmatched_gl_bills = matched_bills_df[~matched_bills_df["bill_inv"].isin(gl_invoice_set)].copy()
+pending_bills = unmatched_gl_bills[unmatched_gl_bills['vendor'].notna()].copy()
 
-# =============================================================================
-# STEP 7: BUILD INVOICE COMPLIANCE PER SIPL
-# =============================================================================
-print("\n--- STEP 7: BUILD INVOICE COMPLIANCE (using v3 corrected logic) ---")
+# Diagnostic: show breakdown of unmatched GL bills
+literal_pending = unmatched_gl_bills[unmatched_gl_bills['is_pending']].shape[0]
+real_invoices = len(unmatched_gl_bills) - literal_pending
+print(f"    Bills unmatched by GL Layer 1: {len(unmatched_gl_bills):,}")
+print(f"      Breakdown: {literal_pending:,} literal PENDING, {real_invoices:,} real-but-unmatched invoice numbers")
+pending_bills_with_vendor = pending_bills
 
-# Run the v3 ETL to generate correct invoice_compliance data
-import subprocess
-print("  Running build_dashboard_data_v3.py...")
-try:
-    result = subprocess.run(
-        [sys.executable, "build_dashboard_data_v3.py"],
-        capture_output=True,
-        text=True,
-        check=True
+# Layer 2 inference dict: (sipl, category) → vendor (for diagnostics)
+layer2_inferred = {}
+layer2_debug = []
+
+for _, pend_bill in pending_bills_with_vendor.iterrows():
+    bill_vendor = pend_bill['vendor']
+    sipl_id = str(pend_bill['matched_sipl']).strip() if pd.notna(pend_bill['matched_sipl']) else None
+    container_id = pend_bill['container']
+    bill_inv = pend_bill['bill_inv']
+
+    # Skip if already have GL confirmation for all categories of this SIPL
+    if pd.notna(sipl_id) and pd.notna(bill_vendor):
+        # Fuzzy match the bills vendor against GL vendors
+        if gl_vendors:
+            match_result = process.extractOne(bill_vendor, gl_vendors, scorer=fuzz.ratio)
+            if match_result and match_result[1] >= 80:
+                matched_vendor = match_result[0]
+                inferred_category = vendor_category_map[matched_vendor]
+                if inferred_category != 'AMBIGUOUS_VENDOR':
+                    # Layer 2: vendor-inferred pending
+                    layer2_key = (sipl_id, inferred_category)
+                    if layer2_key not in layer2_inferred:
+                        layer2_inferred[layer2_key] = (inferred_category, 'PENDING_VENDOR_INFERRED', matched_vendor)
+                        layer2_debug.append(f"Inferred: invoice={bill_inv}, vendor={bill_vendor}, matched_vendor={matched_vendor}, category={inferred_category}, sipl={sipl_id}")
+                else:
+                    layer2_debug.append(f"Skipped (ambiguous): invoice={bill_inv}, vendor={bill_vendor}")
+            else:
+                layer2_debug.append(f"Skipped (no match): invoice={bill_inv}, vendor={bill_vendor}, score={match_result[1] if match_result else 'N/A'}")
+
+print(f"    Layer 2 inferences: {len(layer2_inferred)} (SIPL, category) pairs")
+if layer2_debug:
+    for msg in layer2_debug:
+        print(f"      {msg}")
+
+# Layer 3: Elimination inference (fallback)
+# For each SIPL, count unresolved categories and unassigned pending bills
+layer3_inferred = {}
+
+for sipl_id in pd.concat([confirmed_events['sipl'], unmatched_gl_bills['matched_sipl']], ignore_index=True).dropna().unique():
+    sipl_id = str(sipl_id).strip() if pd.notna(sipl_id) else None
+    if not sipl_id:
+        continue
+
+    # Which categories are already resolved (Complete via Layer 1, or Pending via Layer 2)?
+    resolved_cats = set()
+    for cat in REQUIRED_CATEGORIES:
+        if (sipl_id, cat) in confirmed_by_sipl_cat.index:
+            resolved_cats.add(cat)
+        elif (sipl_id, cat) in layer2_inferred:
+            resolved_cats.add(cat)
+
+    unresolved_cats = set(REQUIRED_CATEGORIES) - resolved_cats
+
+    # How many unmatched GL bills for this SIPL are unassigned (across Layers 1-2)?
+    sipl_unmatched = unmatched_gl_bills[unmatched_gl_bills['matched_sipl'] == sipl_id]
+    unassigned_unmatched_bills = len(sipl_unmatched) - len(
+        [k for k in layer2_inferred.keys() if k[0] == sipl_id]
     )
-    print("  [OK] v3 logic completed")
-    # Load the generated CSV
-    invoice_compliance = pd.read_csv('invoice_compliance_v3_final.csv')
-    print(f"  [OK] Loaded invoice_compliance: {len(invoice_compliance)} SIPLs")
-    print(f"       Complete: {(invoice_compliance['overall_status'] == 'Complete').sum()}")
-    print(f"       Pending: {(invoice_compliance['overall_status'] == 'Pending').sum()}")
-    print(f"       Missing: {(invoice_compliance['overall_status'] == 'Missing').sum()}")
-except subprocess.CalledProcessError as e:
-    print(f"  [ERROR] v3 logic failed: {e.stderr}")
-    invoice_compliance = None
-except FileNotFoundError:
-    print("  [WARNING] v3 CSV not found, using legacy logic")
-    invoice_compliance = None
 
-if invoice_compliance is None:
-    print("\n--- STEP 7 (LEGACY FALLBACK): BUILD INVOICE COMPLIANCE (PER-SIPL) ---")
+    # Assign unmatched bills to unresolved categories (up to count available)
+    for cat in sorted(unresolved_cats):
+        if unassigned_unmatched_bills > 0:
+            layer3_key = (sipl_id, cat)
+            layer3_inferred[layer3_key] = (cat, 'PENDING_ELIMINATION_INFERRED', None)
+            unassigned_unmatched_bills -= 1
 
-required_events = invoice_events[invoice_events["category"].isin(REQUIRED_CATEGORIES)].copy()
+print(f"    Layer 3 inferences: {len(layer3_inferred)} (SIPL, category) pairs")
 
-# Confirmed invoices per (SIPL, category)
-confirmed_required = required_events[~required_events["is_pending"]]
-confirmed_by_sipl = (
-    confirmed_required.dropna(subset=["sipl", "category"])
-    .drop_duplicates(subset=["sipl", "category"])
-    .assign(flag=1)
-    .pivot_table(index="sipl", columns="category", values="flag", fill_value=0)
-    .reindex(columns=REQUIRED_CATEGORIES, fill_value=0)
-)
-
-# Pending invoices per (SIPL, category)
-pending_required = required_events[required_events["is_pending"]]
-pending_by_sipl = (
-    pending_required.dropna(subset=["sipl", "category"])
-    .drop_duplicates(subset=["sipl", "category"])
-    .assign(flag=1)
-    .pivot_table(index="sipl", columns="category", values="flag", fill_value=0)
-    .reindex(columns=REQUIRED_CATEGORIES, fill_value=0)
-)
-
-# Build per-SIPL compliance
+# Build final invoice_compliance dataframe
+print("  Building final invoice_compliance dataframe...")
 invoice_compliance_rows = []
+
 for _, sipl_row in sipl_master.iterrows():
-    sipl_id = sipl_row["sipl"]
+    sipl_id = str(sipl_row["sipl"]).strip() if pd.notna(sipl_row["sipl"]) else None
+    if not sipl_id:
+        continue
+
     container_id = sipl_row["container"]
 
-    # Define arrival_status based on days_to_port_eta
+    # Arrival status from days_to_port_eta
     days_eta = sipl_row.get("days_to_port_eta")
     if pd.isna(days_eta):
         arrival_status = "Unknown"
@@ -558,48 +590,72 @@ for _, sipl_row in sipl_master.iterrows():
     else:
         arrival_status = "Approaching"
 
+    # Initialize row with base columns (must include all expected by logic_cloud.py)
     row = {
         "sipl": sipl_id,
         "container": container_id,
         "po_numbers": sipl_row.get("po_numbers", ""),
-        "supplier": sipl_row.get("supplier"),
         "freight_forwarder": sipl_row.get("freight_forwarder"),
         "destination": sipl_row.get("ship_to_location"),
         "port_eta": sipl_row.get("port_eta"),
+        "location_eta": sipl_row.get("location_eta"),
         "days_to_port_eta": sipl_row.get("days_to_port_eta"),
-        "operational_priority": sipl_row.get("operational_priority"),
         "arrival_status": arrival_status,
     }
 
-    comp_row = confirmed_by_sipl.loc[sipl_id] if sipl_id in confirmed_by_sipl.index else pd.Series(0, index=REQUIRED_CATEGORIES)
-    pend_row = pending_by_sipl.loc[sipl_id] if sipl_id in pending_by_sipl.index else pd.Series(0, index=REQUIRED_CATEGORIES)
+    # Score each required category (Layer 1 > Layer 2 > Layer 3 > Missing)
+    missing_cats = []
+    pending_cats = []
+    vendors_to_follow_up = []
 
-    missing_cats, pending_cats = [], []
     for cat in REQUIRED_CATEGORIES:
-        if comp_row[cat] == 1:
+        cat_key = (sipl_id, cat)
+
+        if cat_key in confirmed_by_sipl_cat.index:
+            # Layer 1: Complete (confirmed via GL)
             row[f"{cat}_status"] = "Complete"
-        elif pend_row[cat] == 1:
+            vendor = confirmed_by_sipl_cat.loc[cat_key, 'vendor']
+            if pd.notna(vendor):
+                vendors_to_follow_up.append(vendor)
+        elif cat_key in layer2_inferred:
+            # Layer 2: Pending (vendor-inferred)
+            row[f"{cat}_status"] = "Pending"
+            _, _, vendor = layer2_inferred[cat_key]
+            pending_cats.append(cat)
+            if vendor and pd.notna(vendor):
+                vendors_to_follow_up.append(vendor)
+        elif cat_key in layer3_inferred:
+            # Layer 3: Pending (elimination-inferred)
             row[f"{cat}_status"] = "Pending"
             pending_cats.append(cat)
         else:
+            # Missing: no inference across all layers
             row[f"{cat}_status"] = "Missing"
             missing_cats.append(cat)
 
+    # Summary columns
     row["missing_categories"] = ", ".join(missing_cats) if missing_cats else ""
     row["pending_categories"] = ", ".join(pending_cats) if pending_cats else ""
 
-    if not missing_cats and not pending_cats:
-        row["overall_status"] = "Complete"
-    elif missing_cats and not pending_cats:
+    # Vendor to follow up (deduplicate, clean via clean_text)
+    vendors_unique = list(dict.fromkeys(vendors_to_follow_up))  # preserve order, remove dupes
+    row["vendor_to_follow_up"] = ", ".join([str(v).strip() for v in vendors_unique if pd.notna(v)])
+
+    # Overall status
+    if missing_cats:
         row["overall_status"] = "Missing"
+    elif pending_cats:
+        row["overall_status"] = "Pending"
     else:
-        row["overall_status"] = "Missing" if missing_cats else "Pending"
+        row["overall_status"] = "Complete"
 
     invoice_compliance_rows.append(row)
 
 invoice_compliance = pd.DataFrame(invoice_compliance_rows)
 print(f"  invoice_compliance: {invoice_compliance.shape}")
-print(invoice_compliance["overall_status"].value_counts().to_string())
+print(f"    Complete: {(invoice_compliance['overall_status'] == 'Complete').sum()}")
+print(f"    Pending: {(invoice_compliance['overall_status'] == 'Pending').sum()}")
+print(f"    Missing: {(invoice_compliance['overall_status'] == 'Missing').sum()}")
 
 # =============================================================================
 # STEP 8: BUILD RECONCILIATION AUDIT
@@ -647,7 +703,6 @@ def clean_dataframe_columns(df):
 invoice_compliance = clean_dataframe_columns(invoice_compliance)
 unmatched_bills_df = clean_dataframe_columns(unmatched_bills_df)
 reconciliation_audit = clean_dataframe_columns(reconciliation_audit)
-invoice_events = clean_dataframe_columns(invoice_events)
 bills = clean_dataframe_columns(bills)
 in_transit = clean_dataframe_columns(in_transit)
 inventory_intransit = clean_dataframe_columns(inventory_intransit)
@@ -683,7 +738,6 @@ SHEETS = {
     "inventory_intransit":  inventory_intransit,
     "shipment_mapping":     shipment_mapping_data,  # Includes po_number (backward compatible)
     "bills":                bills,
-    "invoice_events":       invoice_events,
     "invoice_compliance":   invoice_compliance,
     "unmatched_bills":      unmatched_bills_df,
     "reconciliation_audit": reconciliation_audit,

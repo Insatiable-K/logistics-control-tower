@@ -329,3 +329,69 @@ def load_html_table(path: Path) -> pd.DataFrame:
     )
     df = df[~junk_mask].reset_index(drop=True)
     return df
+
+
+# =============================================================================
+# VENDOR → CATEGORY INFERENCE MAPPING
+# =============================================================================
+# For pending bills without a real invoice number (category unknown), infer the
+# category from historical GL data: which categories does this vendor supply?
+# If a vendor's GL entries are dominated by one category (≥90%), use that;
+# if a vendor supplies multiple categories equally, mark AMBIGUOUS_VENDOR.
+
+def build_vendor_category_mapping(gl_freight, required_categories, threshold=0.90):
+    """
+    Build a vendor → category mapping from GL data.
+
+    Args:
+        gl_freight: DataFrame with columns 'party' (vendor) and 'category'
+                   (already classified via normalize_category)
+        required_categories: list of expected category values (e.g. ["OF", "CUSTOMS", "DUTY", "DRAYAGE"])
+        threshold: confidence threshold (default 0.90 = ≥90% of vendor's GL lines for one category)
+
+    Returns:
+        dict mapping vendor name (string) → category (string) or 'AMBIGUOUS_VENDOR'
+        Vendors with no classified GL entries are excluded.
+    """
+    # Filter to only classified GL entries (category is not None/NaN)
+    gl_classified = gl_freight[gl_freight['category'].notna()].copy()
+    # Exclude ACCESSORIAL/other non-required categories so that noise (MISC,
+    # ISF, AMS, etc.) doesn't dilute the vendor's dominance calculation for
+    # the 4 required categories.
+    gl_classified = gl_classified[gl_classified['category'].isin(required_categories)]
+
+    if gl_classified.empty:
+        return {}
+
+    # Group by vendor (party) and count category occurrences
+    vendor_category_counts = (
+        gl_classified.groupby(['party', 'category'])
+        .size()
+        .reset_index(name='count')
+    )
+
+    # Compute total per vendor
+    vendor_totals = vendor_category_counts.groupby('party')['count'].sum().reset_index(name='total')
+
+    # Join to compute percentage
+    vendor_category_counts = vendor_category_counts.merge(vendor_totals, on='party')
+    vendor_category_counts['pct'] = vendor_category_counts['count'] / vendor_category_counts['total']
+
+    # For each vendor, find if one category dominates ≥threshold
+    mapping = {}
+    for vendor in vendor_category_counts['party'].unique():
+        vendor_data = vendor_category_counts[vendor_category_counts['party'] == vendor]
+        # Sort by percentage descending
+        vendor_data = vendor_data.sort_values('pct', ascending=False)
+
+        top_category = vendor_data.iloc[0]['category']
+        top_pct = vendor_data.iloc[0]['pct']
+
+        if top_pct >= threshold:
+            # Vendor is dominated by one category
+            mapping[vendor] = top_category
+        else:
+            # Vendor spans multiple categories → ambiguous
+            mapping[vendor] = 'AMBIGUOUS_VENDOR'
+
+    return mapping
