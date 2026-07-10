@@ -635,9 +635,6 @@ print("\n" + "=" * 60)
 print("  QC SNAPSHOT — GENERATING AUDIT TRAIL")
 print("=" * 60)
 
-PENDING_RE_QC = re.compile(
-    r"^(PENDING|PENDNG|PENDIG|PENDIN|PEND|PENING|POSTED)$", re.IGNORECASE
-)
 CM_RE_QC      = re.compile(r"\bCM$", re.IGNORECASE)
 JUNK_RE_QC    = re.compile(r"^\d{1,4}$")
 run_date      = pd.Timestamp.today().normalize()
@@ -775,7 +772,7 @@ if errors:
     print(f"\n  QC errors found      : {len(qc_snap):,}")
     print(f"  Critical             : {(qc_snap['error_type'] == 'CRITICAL').sum():,}")
     print(f"  Standard             : {(qc_snap['error_type'] == 'STANDARD').sum():,}")
-    print(f"\n  Error breakdown:")
+    print("\n  Error breakdown:")
     print(qc_snap["error_code"].value_counts().to_string())
 
     # APPEND only — never replace — this is the audit trail

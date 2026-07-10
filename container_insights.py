@@ -11,10 +11,8 @@ logistics_dashboard.py (which imports render_tab()).
 
 import streamlit as st
 import pandas as pd
-import numpy as np
 from datetime import datetime
 import plotly.express as px
-import plotly.graph_objects as go
 import sys
 from pathlib import Path
 
@@ -60,7 +58,6 @@ def render_tab():
     gl = load_gl()
     merged = load_merged(WINDOW_START, window_end)
     ledger = merged["container_ledger"]
-    matched = merged["matched_detail"]
     unmatched_gl = merged["unmatched_gl"]
     pending_bill_detail = merged["pending_bill_detail"]
 

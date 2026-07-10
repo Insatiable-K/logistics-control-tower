@@ -6,14 +6,11 @@ from logic import (
     build_execution_master,
     get_containers_on_water,
     get_arriving_today,
-    get_current_week_arrivals,
     get_next_7_days_arrivals,
     get_location_reached,
     get_location_next_7_days,
     get_port_eta_doc_risk,
     get_eta_performance,
-    get_pos_received_in_range,
-    get_pos_approved_in_range,
     get_rollover_summary,
     get_container_data_issues,
     get_lfd_risk,
@@ -490,8 +487,6 @@ with tab1:
         
     
     
-    
-    from logic import get_rollover_summary
     
     # =============================================================================
     # 🔁 HIGH ROLLOVER CONTAINERS (CORRECT LOGIC)

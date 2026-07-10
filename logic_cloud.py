@@ -29,11 +29,10 @@ not a stylistic preference:
    invoice_ready boolean). The rebuilt ETL scores compliance per-SIPL
    with a different column set (see build_dashboard_data.py STEP 6) per
    an updated business decision to rely on GL only, not manually-tagged
-   processor logs — so this function is rewritten against that schema,
-   preserving the same OUTPUT contract app_cloud.py already consumes
-   (container_id, po_number, arrival_status, port_eta, missing_bills,
-   pending_bills, invoice_ready) so the presentation layer didn't also
-   need a rewrite.
+   processor logs. app_cloud.py's Tab 3 was subsequently rewritten
+   against get_operational_invoice_dashboard() instead, which made this
+   function's presentation-layer contract moot — removed as dead code
+   (logic.py keeps its own copy, still used by app.py's tab3).
 
 One thing deliberately NOT "fixed": the previous is_booking check in
 app_cloud.py (`event_status == "BOOKED"`) looked buggy in isolation, but
@@ -50,8 +49,6 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 from utils import clean_container as clean_container_strict  # single source of truth
-
-REQUIRED_CATEGORIES = ["OF", "CUSTOMS", "DUTY", "DRAYAGE"]
 
 
 # -----------------------------------------------------------------------------
@@ -147,196 +144,6 @@ def get_rollover_summary(bookings):
     df = df[df["event_status"].str.contains("ROLL", na=False)]
     df = df.drop_duplicates(subset=["container_id", "event_date", "vessel", "etd"])
     return df.groupby("container_id").size().reset_index(name="rollover_count")
-
-
-# -----------------------------------------------------------------------------
-# FINAL EVENT DATE
-# -----------------------------------------------------------------------------
-def get_container_final_date(bookings):
-    df = bookings.copy()
-    return (
-        df.sort_values("event_date")
-        .groupby("container_id")["event_date"]
-        .last()
-        .reset_index(name="final_event_date")
-    )
-
-
-# -----------------------------------------------------------------------------
-# KPI — TOTAL BOOKED CONTAINERS
-# -----------------------------------------------------------------------------
-def get_total_booked_containers(bookings):
-    df = bookings.copy()
-    df = df[df["container_id"].notna()]
-    df = df[df["etd"].notna()]
-    return df["container_id"].nunique()
-
-
-# -----------------------------------------------------------------------------
-# KPI — CONTAINERS PLANNED TO SAIL
-# -----------------------------------------------------------------------------
-def get_containers_planned_to_sail(df_master, selected_date):
-    df = df_master.copy()
-    df["latest_etd"] = pd.to_datetime(df["latest_etd"], format="mixed")
-    selected_date = pd.to_datetime(selected_date).normalize()
-    sailed = df[df["latest_etd"].dt.normalize() == selected_date]
-    return sailed["container_id"].nunique()
-
-
-# -----------------------------------------------------------------------------
-# OPEN PO KPI
-# -----------------------------------------------------------------------------
-def get_open_po_kpi(open_po_df):
-    df = open_po_df.copy()
-    df.columns = [c.lower().strip() for c in df.columns]
-
-    df["po_status"] = df["po_status"].astype(str).str.strip().str.upper()
-    df["category"] = df["category"].astype(str).str.strip().str.upper()
-
-    TARGET_STATUS = "INSPECTION REPORT APPROVED"
-    TARGET_CATEGORIES = ["PQ SAMPLES", "PENTAL QUARTZ", "NATURAL STONE"]
-
-    df_filtered = df[
-        (df["po_status"] == TARGET_STATUS) &
-        (df["category"].isin(TARGET_CATEGORIES))
-    ]
-
-    total_pos = df_filtered["po"].nunique()
-    category_breakdown = df_filtered["category"].value_counts().reset_index()
-    category_breakdown.columns = ["category", "count"]
-    return total_pos, category_breakdown
-
-
-# -----------------------------------------------------------------------------
-# CONTAINER MASTER
-# -----------------------------------------------------------------------------
-def build_container_master(bookings):
-    df = bookings[bookings["container_id"].notna()].copy()
-
-    start_etd = df.groupby("container_id")["etd"].min()
-    latest_etd = df.sort_values("event_date").groupby("container_id")["etd"].last()
-    promised_eta = df.sort_values("event_date").groupby("container_id")["eta"].last()
-    po_count = df.groupby("container_id")["po_number"].nunique()
-
-    container_master = pd.DataFrame({
-        "start_etd": start_etd,
-        "latest_etd": latest_etd,
-        "promised_eta": promised_eta,
-        "po_count": po_count
-    }).reset_index()
-
-    container_master = container_master.merge(get_rollover_summary(bookings), on="container_id", how="left")
-    container_master = container_master.merge(get_container_final_date(bookings), on="container_id", how="left")
-    container_master["rollover_count"] = container_master["rollover_count"].fillna(0)
-    return container_master
-
-
-# -----------------------------------------------------------------------------
-# KPI — CONTAINERS BY DESTINATION (BOOKED ONLY, NOT INSPECTION APPROVED)
-# -----------------------------------------------------------------------------
-def get_containers_by_destination(bookings, open_po_df):
-    open_po = open_po_df.copy()
-    open_po.columns = [c.lower().strip() for c in open_po.columns]
-
-    open_po["po"] = pd.to_numeric(open_po["po"], errors="coerce").astype("Int64")
-    open_po["po_status"] = open_po["po_status"].astype(str).str.strip().str.upper()
-    open_po["ship_to_location"] = open_po["ship_to_location"].astype(str).str.strip()
-
-    booked = bookings[
-        (bookings["container_id"].notna()) & (bookings["etd"].notna())
-    ][["container_id", "po_number"]].drop_duplicates()
-
-    df = booked.merge(
-        open_po[["po", "ship_to_location", "po_status"]],
-        left_on="po_number", right_on="po", how="left"
-    )
-    df = df[df["po_status"] != "INSPECTION REPORT APPROVED"]
-
-    return (
-        df.drop_duplicates(subset=["container_id", "ship_to_location"])
-        .groupby("ship_to_location")["container_id"]
-        .nunique()
-        .reset_index(name="container_count")
-        .sort_values("container_count", ascending=False)
-    )
-
-
-# -----------------------------------------------------------------------------
-# KPI — CONTAINERS SCHEDULED TO SAIL (MONTH)
-# -----------------------------------------------------------------------------
-def get_containers_sailed_by_month(df_master, selected_month):
-    df = df_master.copy()
-    df["latest_etd"] = pd.to_datetime(df["latest_etd"], format="mixed")
-    df["month"] = df["latest_etd"].dt.to_period("M")
-    selected_month = pd.Period(selected_month)
-    return df[df["month"] == selected_month]["container_id"].nunique()
-
-
-# -----------------------------------------------------------------------------
-# FIRST BOOKING DATE (TRUE BOOKING MOMENT)
-# -----------------------------------------------------------------------------
-def get_container_first_booking(bookings):
-    df = bookings.copy()
-    df = df[df["container_id"].notna()]
-    df = df[df["etd"].notna()]
-    return (
-        df.sort_values("event_date")
-        .groupby("container_id")["event_date"]
-        .min()
-        .reset_index(name="first_booking_date")
-    )
-
-
-# -----------------------------------------------------------------------------
-# CONTAINERS BOOKED IN DATE RANGE (FLOW METRIC)
-# -----------------------------------------------------------------------------
-def get_containers_booked_in_range(bookings, start_date, end_date):
-    first_booking = get_container_first_booking(bookings)
-    start_date, end_date = pd.to_datetime(start_date), pd.to_datetime(end_date)
-    df = first_booking[
-        (first_booking["first_booking_date"] >= start_date) &
-        (first_booking["first_booking_date"] <= end_date)
-    ]
-    return df["container_id"].nunique()
-
-
-# -----------------------------------------------------------------------------
-# ACTIVE CONTAINERS IN DATE RANGE (ACTIVITY METRIC)
-# -----------------------------------------------------------------------------
-def get_active_containers(bookings, start_date, end_date):
-    df = bookings.copy()
-    start_date, end_date = pd.to_datetime(start_date), pd.to_datetime(end_date)
-    df = df[(df["event_date"] >= start_date) & (df["event_date"] <= end_date)]
-    return df["container_id"].nunique()
-
-
-# -----------------------------------------------------------------------------
-# CONTAINERS SCHEDULED TO SAIL IN DATE RANGE (PLANNED FLOW)
-# -----------------------------------------------------------------------------
-def get_containers_sailed_in_range(df_master, start_date, end_date):
-    df = df_master.copy()
-    df["latest_etd"] = pd.to_datetime(df["latest_etd"], format="mixed")
-    start_date, end_date = pd.to_datetime(start_date), pd.to_datetime(end_date)
-    df = df[(df["latest_etd"] >= start_date) & (df["latest_etd"] <= end_date)]
-    return df["container_id"].nunique()
-
-
-# -----------------------------------------------------------------------------
-# PIPELINE DESTINATION (UNBOOKED)
-# -----------------------------------------------------------------------------
-def get_pipeline_destination(open_po_df):
-    df = open_po_df.copy()
-    df.columns = [c.lower().strip() for c in df.columns]
-    df["po_status"] = df["po_status"].astype(str).str.strip().str.upper()
-    df["ship_to_location"] = df["ship_to_location"].astype(str).str.strip()
-
-    df = df[df["po_status"] == "INSPECTION REPORT APPROVED"]
-    return (
-        df.groupby("ship_to_location")["po"]
-        .nunique()
-        .reset_index(name="po_count")
-        .sort_values("po_count", ascending=False)
-    )
 
 
 # =============================================================================
@@ -444,10 +251,6 @@ def build_execution_master(in_transit_df, inventory_intransit_df, shipment_mappi
 # =============================== KPI LAYER ====================================
 # =============================================================================
 
-def get_total_containers(df):
-    return df["container_id"].nunique()
-
-
 def get_containers_on_water(df):
     today = pd.Timestamp.today().normalize()
     return df[df["port_eta"] >= today]["container_id"].nunique()
@@ -458,39 +261,11 @@ def get_arriving_today(df):
     return df[df["port_eta"].dt.normalize() == today]["container_id"].nunique()
 
 
-def get_current_week_arrivals(df):
-    today = pd.Timestamp.today()
-    current_week = today.isocalendar()[1]
-    current_year = today.year
-    mask = df["port_eta"].notna()
-    iso = df.loc[mask, "port_eta"].dt.isocalendar()
-    matched = df.loc[mask].loc[(iso["week"] == current_week) & (iso["year"] == current_year)]
-    return matched["container_id"].nunique()
-
-
 def get_next_7_days_arrivals(df):
     today = pd.Timestamp.today().normalize()
     return df[
         (df["port_eta"] >= today) & (df["port_eta"] <= today + pd.Timedelta(days=7))
     ]["container_id"].nunique()
-
-
-def get_7day_not_ready(df):
-    today = pd.Timestamp.today().normalize()
-    if "sipl_status" not in df.columns:
-        return 0
-    ready_status = ["Scheduled for Delivery", "Delivery Pending", "At branch", "D.Os  Received"]
-    return df[
-        (df["port_eta"] >= today) &
-        (df["port_eta"] <= today + pd.Timedelta(days=7)) &
-        (~df["sipl_status"].isin(ready_status))
-    ]["container_id"].nunique()
-
-
-def get_invoice_needed(df):
-    if "sipl_status" not in df.columns:
-        return 0
-    return df[df["sipl_status"].str.upper().str.contains("INVOICE", na=False)]["container_id"].nunique()
 
 
 def get_location_reached(df):
@@ -505,36 +280,6 @@ def get_location_next_7_days(df):
         (df["delivery_eta"] >= today) &
         (df["delivery_eta"] <= today + pd.Timedelta(days=7))
     ]["container_id"].nunique()
-
-
-def get_status_lag(df):
-    today = pd.Timestamp.today().normalize()
-    if "sipl_status" not in df.columns:
-        return 0
-    return df[
-        (df["delivery_eta"].notna()) &
-        (df["delivery_eta"] < today) &
-        (~df["sipl_status"].isin(["At branch", "Scheduled for Delivery"]))
-    ]["container_id"].nunique()
-
-
-def get_lfd_breach(df):
-    mask = df["lfd"].notna() & df["delivery_eta"].notna()
-    return df[mask & (df["lfd"] < df["delivery_eta"])]["container_id"].nunique()
-
-
-def get_eta_delay(open_po_df, df):
-    booking = open_po_df[["po", "eta_port"]].copy()
-    booking.columns = booking.columns.str.lower()
-    booking.rename(columns={"eta_port": "promised_eta"}, inplace=True)
-    booking["promised_eta"] = pd.to_datetime(booking["promised_eta"], errors="coerce", format="mixed")
-    booking["po"] = pd.to_numeric(booking["po"], errors="coerce").astype("Int64")
-
-    df = df.copy()
-    df["po_number"] = pd.to_numeric(df["po_number"], errors="coerce").astype("Int64")
-    df = df.merge(booking, left_on="po_number", right_on="po", how="left")
-    df["eta_delay"] = (df["port_eta"] - df["promised_eta"]).dt.days
-    return df
 
 
 def get_port_eta_doc_risk(df):
@@ -593,68 +338,6 @@ def get_eta_performance(df_exec, bookings):
         raise ValueError("ship_b_l_date missing from execution layer — fix build_execution_master()")
 
     return df
-
-
-# -----------------------------------------------------------------------------
-# FIRST PO RECEIVED / BOOKING KPIs
-# -----------------------------------------------------------------------------
-def get_pos_received_in_range(bookings):
-    df = bookings.copy()
-    df = df[df["po_number"].notna()]
-    return (
-        df.sort_values("event_date")
-        .groupby("po_number")["event_date"]
-        .min()
-        .reset_index(name="first_received_date")
-    )
-
-
-def get_pos_approved_in_range(bookings, start_date, end_date):
-    df = bookings.copy()
-    df = df[df["po_number"].notna()].copy()
-    df["event_date"] = pd.to_datetime(df["event_date"], errors="coerce", format="mixed")
-    df["event_status"] = df["event_status"].astype(str).str.upper().str.strip()
-
-    start_date, end_date = pd.to_datetime(start_date), pd.to_datetime(end_date)
-    df = df[(df["event_date"] >= start_date) & (df["event_date"] <= end_date)]
-
-    approved = df[df["event_status"] != "HOLD"]
-    return approved["po_number"].nunique()
-
-
-def get_po_to_container_ratio(bookings, start_date, end_date):
-    approved_pos = get_pos_approved_in_range(bookings, start_date, end_date)
-
-    df = bookings.copy()
-    df = df[df["container_id"].notna()].copy()
-    df["event_date"] = pd.to_datetime(df["event_date"], errors="coerce", format="mixed")
-    df["event_status"] = df["event_status"].astype(str).str.upper().str.strip()
-
-    is_booking = (
-        (df["event_status"] == "BOOKED") |
-        ((df["event_status"] == "ROLLOVER") & df["container_id"].notna())
-    )
-    first_container = df[is_booking].groupby("container_id", as_index=False)["event_date"].min()
-
-    start_date, end_date = pd.to_datetime(start_date), pd.to_datetime(end_date)
-    container_in_range = first_container[
-        (first_container["event_date"] >= start_date) & (first_container["event_date"] <= end_date)
-    ]
-    total_containers = container_in_range["container_id"].nunique()
-
-    ratio = round(total_containers / approved_pos, 2) if approved_pos > 0 else 0
-    return approved_pos, total_containers, ratio
-
-
-def get_pos_without_container(bookings):
-    df = bookings.copy()
-    df = df[df["po_number"].notna()].copy()
-    df["event_status"] = df["event_status"].astype(str).str.upper().str.strip()
-
-    approved = df[df["event_status"] != "HOLD"]
-    latest = approved.sort_values("event_date").groupby("po_number", as_index=False).last()
-    no_container = latest[latest["container_id"].isna()]
-    return no_container["po_number"].nunique(), no_container
 
 
 # =============================================================================
@@ -772,63 +455,6 @@ def get_lfd_risk(df_exec, days_ahead=3):
     ].copy()
 
     return breach_df, approaching_df
-
-
-# -----------------------------------------------------------------------------
-# ARRIVING / OUTSTANDING CONTAINERS WITH INVOICE ISSUES
-#
-# REWRITTEN against the new per-SIPL invoice_compliance schema (see
-# build_dashboard_data.py STEP 6). The output CONTRACT is preserved so
-# app_cloud.py's tab3 rendering (missing_bills / pending_bills /
-# invoice_ready / arrival_status columns) keeps working unmodified:
-#   arrival_status == "Approaching"  -> next `days` days
-#   arrival_status == "Today"        -> arriving today
-#   arrival_status == "Past ETA"     -> already passed, bills still outstanding
-#   missing_bills  != ""             -> Missing Bills tab
-#   pending_bills  != ""             -> Pending Bills tab
-#
-# Per the updated business decision (GL-only, no processor-log tagging),
-# "pending" can no longer be attributed to a specific category — it's a
-# signal that unposted bill activity exists, not a per-category status.
-# pending_bills is populated with a generic marker rather than fabricating
-# which of the 4 categories it covers.
-# -----------------------------------------------------------------------------
-def get_arriving_invoice_risk(df_exec, invoice_compliance, days=3):
-    """
-    Map invoice compliance (per-SIPL) to execution master (per-SIPL) to
-    surface arriving containers with invoice risk. Per redesign, invoice_compliance
-    contains: sipl, container, overall_status (Complete/Pending/Missing),
-    missing_categories, pending_categories, and individual category statuses.
-    """
-    ALL_MISSING = ", ".join(REQUIRED_CATEGORIES)
-    today = pd.Timestamp.today().normalize()
-
-    df = df_exec[df_exec["port_eta"].notna()].copy()
-    df["port_eta"] = pd.to_datetime(df["port_eta"], errors="coerce", format="mixed")
-
-    df["arrival_status"] = "Approaching"
-    df.loc[df["port_eta"].dt.normalize() == today, "arrival_status"] = "Today"
-    df.loc[df["port_eta"] < today, "arrival_status"] = "Past ETA"
-
-    if not invoice_compliance.empty and "sipl" in df.columns and "sipl" in invoice_compliance.columns:
-        comp = invoice_compliance.copy()
-        df = df.merge(comp[["sipl", "overall_status", "missing_categories", "pending_categories"]],
-                      on="sipl", how="left", suffixes=("", "_compliance"))
-        df["invoice_ready"] = df["overall_status"] == "Complete"
-        df["missing_bills"] = df["missing_categories"].fillna(ALL_MISSING)
-        df["pending_bills"] = df["pending_categories"].fillna("")
-    else:
-        df["invoice_ready"] = False
-        df["missing_bills"] = ALL_MISSING
-        df["pending_bills"] = ""
-
-    no_data_mask = df["invoice_ready"].isna()
-    df.loc[no_data_mask, "missing_bills"] = ALL_MISSING
-    df.loc[no_data_mask, "pending_bills"] = ""
-    df.loc[no_data_mask, "invoice_ready"] = False
-
-    risk = df[df["invoice_ready"] != True].copy()
-    return risk
 
 
 # -----------------------------------------------------------------------------

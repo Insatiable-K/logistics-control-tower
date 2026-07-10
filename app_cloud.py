@@ -16,18 +16,14 @@ from logic_cloud import (
     build_execution_master,
     get_containers_on_water,
     get_arriving_today,
-    get_current_week_arrivals,
     get_next_7_days_arrivals,
     get_location_reached,
     get_location_next_7_days,
     get_port_eta_doc_risk,
     get_eta_performance,
-    get_pos_received_in_range,
-    get_pos_approved_in_range,
     get_rollover_summary,
     get_container_data_issues,
     get_lfd_risk,
-    get_arriving_invoice_risk,
     get_operational_invoice_dashboard,
 )
 
@@ -48,7 +44,6 @@ xls = pd.ExcelFile(uploaded_file)
 # Load all sheets
 bookings_raw         = pd.read_excel(xls, "bookings")
 shipment_mapping_raw = pd.read_excel(xls, "shipment_mapping")
-open_po_raw          = pd.read_excel(xls, "open_po")
 in_transit_raw       = pd.read_excel(xls, "in_transit")
 inventory_raw        = pd.read_excel(xls, "inventory_intransit")
 
@@ -339,8 +334,6 @@ with tab1:
     # =============================================================================
     # 📈 MONTHLY CONTAINER CREATION TREND (INDEPENDENT OF FILTERS)
     # =============================================================================
-    import altair as alt
-    
     st.subheader("📈 Monthly Container Creation Trend")
     
     # -----------------------------------------------------------------------------

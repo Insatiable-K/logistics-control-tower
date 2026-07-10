@@ -33,18 +33,16 @@ RUN:
     python build_dashboard_data_redesigned.py
 """
 
-import re
 import sys
 import numpy as np
 import pandas as pd
 from pathlib import Path
-from datetime import datetime
 
 sys.path.insert(0, str(Path(__file__).parent))
 from utils import (
     load_html_table, standardize_columns, clean_currency, clean_date,
     clean_numeric, clean_text, clean_container, is_pending,
-    REQUIRED_CATEGORIES, ACCESSORIAL_LABEL,
+    REQUIRED_CATEGORIES,
     clean_bills_dataframe, clean_gl_dataframe, score_container_invoice_compliance,
 )
 
@@ -328,7 +326,7 @@ po_by_sipl = (
 sipl_master = sipl_master.merge(po_by_sipl, on="sipl", how="left")
 sipl_master["po_numbers"] = sipl_master["po_numbers"].fillna("")
 
-print(f"  Operational priority breakdown:")
+print("  Operational priority breakdown:")
 print(sipl_master["operational_priority"].value_counts().to_string())
 
 # =============================================================================
@@ -388,7 +386,7 @@ for idx, bill in bills.iterrows():
 matched_bills_df = pd.DataFrame(matched_bills)
 unmatched_bills_df = pd.DataFrame(unmatched_bills) if unmatched_bills else pd.DataFrame(columns=bills.columns.tolist() + ["reason"])
 
-print(f"  Bills matched:")
+print("  Bills matched:")
 for match_type, count in match_summary.items():
     print(f"    {match_type}: {count:,}")
 total_matched = match_summary['matched_by_sipl'] + match_summary['matched_by_container']
@@ -396,7 +394,7 @@ print(f"\n  Total matched: {total_matched:,} of {len(bills):,}")
 print(f"  Match rate: {total_matched / len(bills):.1%}")
 
 if len(unmatched_bills_df) > 0:
-    print(f"\n  Top unmatched reasons:")
+    print("\n  Top unmatched reasons:")
     print(unmatched_bills_df["reason"].value_counts().head(10).to_string())
 
 # =============================================================================

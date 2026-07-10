@@ -151,7 +151,7 @@ def render_tab():
             st.error(f"❌ {slots_scored_twice} container × category slot(s) scored more than once")
     with col2:
         if len(overlap) == 0:
-            st.success(f"✅ 0 containers have both a pending bill and a Missing category")
+            st.success("✅ 0 containers have both a pending bill and a Missing category")
         else:
             st.error(f"❌ {len(overlap)} container(s) have both a pending bill AND a Missing category")
             st.dataframe(

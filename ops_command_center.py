@@ -37,9 +37,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 from logic_cloud import (
-    build_execution_master, get_containers_on_water, get_arriving_today,
-    get_location_reached, get_next_7_days_arrivals, get_location_next_7_days,
-    get_lfd_risk, get_port_eta_doc_risk,
+    build_execution_master, get_containers_on_water, get_next_7_days_arrivals,
+    get_location_next_7_days, get_lfd_risk, get_port_eta_doc_risk,
 )
 
 st.set_page_config(page_title="Ops Command Center", layout="wide")

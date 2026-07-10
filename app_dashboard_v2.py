@@ -19,8 +19,7 @@ DATA:
 
 import streamlit as st
 import pandas as pd
-import numpy as np
-from datetime import datetime, timedelta
+from datetime import datetime
 import altair as alt
 
 # =============================================================================
@@ -168,7 +167,7 @@ def calculate_unified_exception_queue(demurrage_df, invoice_risk_df, in_transit_
             'financial_impact': f"${row['estimated_exposure']:,.0f}",
             'impact_value': row['estimated_exposure'],
             'details': f"{abs(row['_days_from_eta'])} days {'OVERDUE' if row['_days_from_eta'] < 0 else 'until port'}",
-            'action': f"Mitigate detention risk",
+            'action': "Mitigate detention risk",
             'port_eta': row['port_eta']
         })
 
