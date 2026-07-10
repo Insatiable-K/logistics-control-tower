@@ -127,6 +127,39 @@ def render_tab():
     )
 
     # =========================================================================
+    # DATA INTEGRITY CHECK — proves Missing and Pending never overlap
+    # =========================================================================
+    st.divider()
+    st.markdown("### ✅ Data Integrity Check: Missing vs. Pending Never Overlap")
+    st.caption(
+        "Recomputed live from the data above every time this page loads — not a one-off "
+        "claim. A container with a pending bill should never also show a Missing category."
+    )
+
+    dup_slots = detail.groupby(["container", "category"]).size()
+    slots_scored_twice = int((dup_slots > 1).sum())
+
+    containers_with_pending_bill = set(pending_bills["container"].unique())
+    containers_with_missing = set(missing_summary["container"].unique())
+    overlap = containers_with_pending_bill & containers_with_missing
+
+    col1, col2 = st.columns(2)
+    with col1:
+        if slots_scored_twice == 0:
+            st.success(f"✅ Every container × category scored exactly once ({len(detail):,} slots, 0 duplicates)")
+        else:
+            st.error(f"❌ {slots_scored_twice} container × category slot(s) scored more than once")
+    with col2:
+        if len(overlap) == 0:
+            st.success(f"✅ 0 containers have both a pending bill and a Missing category")
+        else:
+            st.error(f"❌ {len(overlap)} container(s) have both a pending bill AND a Missing category")
+            st.dataframe(
+                missing_summary[missing_summary["container"].isin(overlap)],
+                use_container_width=True, hide_index=True
+            )
+
+    # =========================================================================
     # HIGH PRIORITY — missing bills on containers already at/near port
     # =========================================================================
     st.divider()
