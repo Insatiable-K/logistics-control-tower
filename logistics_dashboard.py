@@ -23,6 +23,7 @@ import in_transit_insights
 import inventory_detail_insights
 import shipment_insights
 import invoice_compliance_insights
+import container_risk_insights
 
 st.set_page_config(page_title="Logistics Insights", layout="wide", initial_sidebar_state="collapsed")
 
@@ -33,7 +34,7 @@ st.markdown(
     unsafe_allow_html=True
 )
 
-tab_bills, tab_gl, tab_container, tab_in_transit, tab_inventory, tab_shipment, tab_compliance = st.tabs([
+tab_bills, tab_gl, tab_container, tab_in_transit, tab_inventory, tab_shipment, tab_compliance, tab_risk = st.tabs([
     "📊 Bills Insights",
     "📈 GL Accounting Insights",
     "📦 Container Insights",
@@ -41,6 +42,7 @@ tab_bills, tab_gl, tab_container, tab_in_transit, tab_inventory, tab_shipment, t
     "🏷️ Inventory In Transit Insights",
     "🔗 Shipment Insights (Merged)",
     "📋 Invoice Compliance",
+    "🚨 Container Risk",
 ])
 
 with tab_bills:
@@ -63,3 +65,6 @@ with tab_shipment:
 
 with tab_compliance:
     invoice_compliance_insights.render_tab()
+
+with tab_risk:
+    container_risk_insights.render_tab()

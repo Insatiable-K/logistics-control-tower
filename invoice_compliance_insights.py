@@ -21,7 +21,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 from utils import (
     load_html_table, clean_in_transit_dataframe, clean_bills_dataframe,
-    clean_gl_dataframe, score_container_invoice_compliance, REQUIRED_CATEGORIES
+    clean_gl_dataframe, score_container_invoice_compliance, REQUIRED_CATEGORIES,
+    build_sipl_container_rollup
 )
 
 CATEGORY_LABELS = {"OF": "Ocean Freight", "CUSTOMS": "Customs", "DUTY": "Duty", "DRAYAGE": "Drayage"}
@@ -73,6 +74,30 @@ def render_tab():
     # else to go on).
     container_supplier = sipl_df.groupby("container")["supplier"].first()
 
+    # Arrival urgency, reusing the same container rollup as Container Risk —
+    # a missing bill on a container still weeks from sailing isn't urgent;
+    # one on a container already at port is.
+    rollup = build_sipl_container_rollup(sipl_df)
+    today = pd.Timestamp.today().normalize()
+
+    def _arrival_bucket(port_eta):
+        if pd.isna(port_eta):
+            return "Not Yet Sailed / Unknown"
+        if port_eta < today:
+            return "Past ETA"
+        if port_eta.normalize() == today:
+            return "Today"
+        if port_eta <= today + pd.Timedelta(days=7):
+            return "Approaching (7d)"
+        return "Not Yet Sailed / Unknown"
+
+    rollup = rollup.copy()
+    rollup["arrival_status"] = rollup["port_eta"].apply(_arrival_bucket)
+    container_arrival = rollup.set_index("container")["arrival_status"]
+
+    fully_complete = detail.groupby("container")["status"].apply(lambda s: set(s) == {"Complete"})
+    compliance_pct = 100 * fully_complete.sum() / len(fully_complete) if len(fully_complete) else 0
+
     # =========================================================================
     # WHAT THIS SHOWS
     # =========================================================================
@@ -100,6 +125,35 @@ def render_tab():
         dated.
         """
     )
+
+    # =========================================================================
+    # HIGH PRIORITY — missing bills on containers already at/near port
+    # =========================================================================
+    st.divider()
+    st.markdown("### 🚨 High Priority — Missing Bills, Container At/Near Port")
+
+    missing_urgent = missing_summary.merge(
+        container_arrival.rename("arrival_status"), on="container", how="left"
+    )
+    high_priority = missing_urgent[missing_urgent["arrival_status"].isin(["Past ETA", "Today", "Approaching (7d)"])]
+
+    st.metric("Overall Compliance Rate", f"{compliance_pct:.1f}%", help="Containers fully Complete across all 4 categories")
+
+    if len(high_priority) > 0:
+        st.error(
+            f"**{high_priority['container'].nunique()} container(s)** are already at port or "
+            f"arriving within 7 days with at least one missing bill — these are urgent, not "
+            f"just backlog. Everything else in Missing below can wait."
+        )
+        hp_display = high_priority[["container", "category", "arrival_status"]].copy()
+        hp_display["category"] = hp_display["category"].map(CATEGORY_LABELS)
+        hp_display = hp_display.rename(columns={"category": "Missing Category"})
+        status_order = {"Past ETA": 0, "Today": 1, "Approaching (7d)": 2}
+        hp_display["_sort"] = hp_display["arrival_status"].map(status_order)
+        hp_display = hp_display.sort_values("_sort").drop(columns=["_sort"])
+        st.dataframe(hp_display, use_container_width=True, hide_index=True)
+    else:
+        st.success("No missing bills on containers at/near port — nothing urgent right now.")
 
     # =========================================================================
     # HEADLINE: PER-CATEGORY BREAKDOWN

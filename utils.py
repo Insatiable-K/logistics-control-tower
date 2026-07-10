@@ -1165,6 +1165,7 @@ def build_sipl_container_rollup(sipl_clean):
         has_lfd=("has_lfd", "any"),
         lfd=("lfd", "min"),
         port_eta=("port_eta", "min"),
+        location_eta=("location_eta", "min"),
         has_arrived_at_port=("has_arrived_at_port", "any"),
         ff_nunique=("fr_forwarder", lambda s: s.dropna().nunique()),
         fr_forwarder=("fr_forwarder", lambda s: s.dropna().iloc[0] if s.dropna().size else None),
