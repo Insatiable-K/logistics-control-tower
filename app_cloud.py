@@ -882,23 +882,44 @@ with tab3:
         )
         st.stop()
 
+    # Clean column names to remove any trailing/leading spaces
+    invoice_compliance_clean = invoice_compliance_raw.copy()
+    invoice_compliance_clean.columns = invoice_compliance_clean.columns.str.strip()
+
     # =========================================================================
     # Additional inline filters (if sidebar is insufficient)
+    #
+    # Option lists are scoped to only the containers that match the primary
+    # sidebar filters (Port ETA range / Arrival Status / Missing Bill Type /
+    # Invoice Readiness) -- NOT the entire raw sheet. Otherwise the dropdowns
+    # would offer destinations/forwarders/statuses belonging to containers
+    # that are already excluded from view, which is misleading.
     # =========================================================================
     st.subheader("📋 Additional Filters")
 
-    col_ff, col_dest, col_search = st.columns(3)
+    try:
+        scope_df = get_operational_invoice_dashboard(
+            invoice_compliance_clean,
+            eta_start=ic_eta_from,
+            eta_end=ic_eta_to,
+            arrival_status=ic_arrival if ic_arrival != "All" else "All",
+            missing_bill_type=ic_missing_type if ic_missing_type != "All" else "All",
+            invoice_readiness=ic_readiness if ic_readiness != "All" else "All",
+        )["filtered"]
+    except Exception:
+        scope_df = invoice_compliance_clean
 
-    def _get_options(col_name):
+    def _get_options(col_name, df=scope_df):
         """Extract unique values from a column with semicolon-separated values"""
-        if col_name not in invoice_compliance_raw.columns:
+        if col_name not in df.columns:
             return ["All"]
         vals = sorted(set(
-            v.strip() for cell in invoice_compliance_raw[col_name].dropna().astype(str)
+            v.strip() for cell in df[col_name].dropna().astype(str)
             for v in cell.split(",") if v.strip()
         ))
         return ["All"] + vals
 
+    col_ff, col_dest, col_search = st.columns(3)
     with col_ff:
         ic_forwarder = st.selectbox("Freight Forwarder", _get_options("freight_forwarder"), key="ic_forwarder")
     with col_dest:
@@ -906,14 +927,19 @@ with tab3:
     with col_search:
         ic_search = st.text_input("Search (Container/SIPL/PO)", "", key="ic_search")
 
+    sipl_status_options = sorted(v for v in scope_df.get("sipl_status", pd.Series(dtype=str)).dropna().unique() if str(v).strip())
+    ic_sipl_status = st.multiselect(
+        "SIPL Status",
+        sipl_status_options,
+        default=[],
+        key="ic_sipl_status",
+        help="Leave empty to include all SIPL statuses"
+    )
+
     # =========================================================================
     # RUN OPERATIONAL INVOICE DASHBOARD ENGINE
     # =========================================================================
     try:
-        # Clean column names to remove any trailing/leading spaces
-        invoice_compliance_clean = invoice_compliance_raw.copy()
-        invoice_compliance_clean.columns = invoice_compliance_clean.columns.str.strip()
-
         result = get_operational_invoice_dashboard(
             invoice_compliance_clean,
             eta_start=ic_eta_from,
@@ -922,6 +948,7 @@ with tab3:
             missing_bill_type=ic_missing_type if ic_missing_type != "All" else "All",
             freight_forwarder=ic_forwarder if ic_forwarder != "All" else "All",
             destination=ic_destination if ic_destination != "All" else "All",
+            sipl_status=ic_sipl_status,
             vendor="All",
             invoice_readiness=ic_readiness if ic_readiness != "All" else "All",
             search_text=ic_search if ic_search else None,
@@ -961,6 +988,49 @@ with tab3:
     with kpi_cols[4]:
         st.metric("🚚 Drayage Missing", kpi["drayage_missing"])
 
+    # =========================================================================
+    # CONTAINERS BY SIPL STATUS
+    # A container can carry multiple SIPLs; if those SIPLs disagree on
+    # status, that's a data red flag (not just a display nuisance), so it
+    # is broken out as its own bucket rather than silently collapsed to
+    # whichever status happened to appear first.
+    # =========================================================================
+    if "sipl_status" in filtered_df.columns and "container" in filtered_df.columns:
+        container_status = (
+            filtered_df.dropna(subset=["container"])
+            .assign(sipl_status=lambda d: d["sipl_status"].fillna("Unknown"))
+            .groupby("container")["sipl_status"]
+            .agg(lambda s: sorted(set(s)))
+        )
+        mixed_mask = container_status.apply(len) > 1
+        mixed_containers = container_status[mixed_mask]
+        single_status = container_status[~mixed_mask].apply(lambda s: s[0])
+
+        status_counts = single_status.value_counts().reset_index()
+        status_counts.columns = ["SIPL Status", "Container Count"]
+
+        st.markdown("**📦 Containers by SIPL Status**")
+        rows = list(status_counts.iterrows())
+        if len(mixed_containers):
+            rows.append((None, pd.Series({"SIPL Status": "⚠️ Mixed Status", "Container Count": len(mixed_containers)})))
+        for i in range(0, len(rows), 6):
+            chunk = rows[i:i + 6]
+            for col, (_, row) in zip(st.columns(len(chunk)), chunk):
+                with col:
+                    st.metric(row["SIPL Status"], int(row["Container Count"]))
+
+        if len(mixed_containers):
+            st.warning(
+                f"⚠️ {len(mixed_containers)} container(s) have SIPLs in different pipeline stages "
+                "— likely a real data issue (e.g. a partial update) worth checking."
+            )
+            with st.expander("View containers with mixed SIPL statuses"):
+                mixed_display = pd.DataFrame({
+                    "Container": mixed_containers.index,
+                    "SIPL Statuses": mixed_containers.apply(lambda s: ", ".join(s)),
+                })
+                st.dataframe(mixed_display, use_container_width=True, hide_index=True)
+
     st.markdown("---")
 
     # =========================================================================
@@ -992,8 +1062,9 @@ with tab3:
             st.metric("🟠 Approaching (0-3 Days)", approaching)
 
         # Display urgent containers sorted by urgency (Past ETA first, then Today, then Approaching)
-        urgent_display = urgent_shipments[["container", "sipl", "port_eta", "arrival_status",
-                                           "missing_categories", "freight_forwarder", "destination"]].copy()
+        urgent_cols = ["container", "destination", "sipl_status", "sipl", "port_eta", "arrival_status",
+                       "missing_categories", "freight_forwarder"]
+        urgent_display = urgent_shipments[[c for c in urgent_cols if c in urgent_shipments.columns]].copy()
         urgent_display = urgent_display.rename(columns={
             "container": "Container",
             "sipl": "SIPL",
@@ -1001,7 +1072,8 @@ with tab3:
             "arrival_status": "Status",
             "missing_categories": "Missing Bills",
             "freight_forwarder": "Freight Forwarder",
-            "destination": "Destination"
+            "destination": "Delivery Location",
+            "sipl_status": "SIPL Status"
         })
 
         # Sort by urgency
@@ -1079,42 +1151,16 @@ with tab3:
             st.info("ℹ️ No shipments have complete invoice coverage in this filter view.")
         else:
             st.caption(f"Showing {len(complete_df)} SIPLs with complete invoice coverage")
+            complete_cols = ["container", "destination", "sipl_status", "sipl", "po_numbers",
+                              "port_eta", "arrival_status", "freight_forwarder"]
+            complete_display = complete_df[[c for c in complete_cols if c in complete_df.columns]].rename(columns={
+                "container": "Container", "destination": "Delivery Location", "sipl_status": "SIPL Status",
+                "sipl": "SIPL", "po_numbers": "PO", "port_eta": "Port ETA",
+                "arrival_status": "Arrival Status", "freight_forwarder": "Freight Forwarder",
+            })
             st.dataframe(
-                complete_df,
+                complete_display,
                 use_container_width=True,
                 hide_index=True
             )
 
-    # =========================================================================
-    # RECONCILIATION REPORT (Hidden by default)
-    # =========================================================================
-    with st.expander("📊 Reconciliation Report (Unmatched Bills Audit)"):
-        st.markdown(
-            "**Purpose:** Track every unmatched bill and the reason it couldn't be matched to a "
-            "live container. This ensures complete audit trail — no invoices are silently dropped."
-        )
-
-        if "unmatched_bills" in xls.sheet_names:
-            try:
-                unmatched_bills = pd.read_excel(xls, "unmatched_bills")
-                if not unmatched_bills.empty:
-                    st.write(f"**Total Unmatched Bills: {len(unmatched_bills):,}**")
-                    st.dataframe(
-                        unmatched_bills,
-                        use_container_width=True,
-                        hide_index=True
-                    )
-                else:
-                    st.info("✅ All bills successfully matched to active shipments!")
-            except Exception as e:
-                st.warning(f"Could not load unmatched bills report: {e}")
-        else:
-            st.warning("📁 unmatched_bills sheet not found in uploaded file")
-
-        if "reconciliation_audit" in xls.sheet_names:
-            try:
-                audit = pd.read_excel(xls, "reconciliation_audit")
-                st.subheader("Audit Summary")
-                st.dataframe(audit, use_container_width=True, hide_index=True)
-            except Exception as e:
-                st.warning(f"Could not load audit report: {e}")

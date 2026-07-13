@@ -478,6 +478,7 @@ def get_operational_invoice_dashboard(
     missing_bill_type="All",
     freight_forwarder="All",
     destination="All",
+    sipl_status=None,
     vendor="All",
     invoice_readiness="All",
     search_text=None,
@@ -507,6 +508,12 @@ def get_operational_invoice_dashboard(
 
     if destination and destination != "All":
         df = df[df["destination"] == destination]
+
+    if sipl_status:
+        selected_statuses = [sipl_status] if isinstance(sipl_status, str) else list(sipl_status)
+        selected_statuses = [s for s in selected_statuses if s and s != "All"]
+        if selected_statuses:
+            df = df[df["sipl_status"].isin(selected_statuses)]
 
     if vendor and vendor != "All":
         df = df[df["vendor_to_follow_up"].fillna("").str.contains(re.escape(vendor), na=False)]
@@ -544,10 +551,11 @@ def get_operational_invoice_dashboard(
         "container": "Container", "po_numbers": "PO", "sipl": "SIPL",
         "port_eta": "Port ETA", "arrival_status": "Arrival Status",
         "missing_bills_display": "Missing Bills", "freight_forwarder": "Freight Forwarder",
-        "vendor_to_follow_up": "Vendor",
+        "vendor_to_follow_up": "Vendor", "destination": "Delivery Location",
+        "sipl_status": "SIPL Status",
     })
-    missing_cols = ["Container", "PO", "SIPL", "Port ETA", "Arrival Status",
-                    "Missing Bills", "Freight Forwarder", "Vendor"]
+    missing_cols = ["Container", "Delivery Location", "SIPL Status", "PO", "SIPL", "Port ETA",
+                    "Arrival Status", "Missing Bills", "Freight Forwarder", "Vendor"]
     missing_df = missing_df[[c for c in missing_cols if c in missing_df.columns]]
 
     # --- Simplified Pending Bills view ---------------------------------------
@@ -557,9 +565,10 @@ def get_operational_invoice_dashboard(
         "container": "Container", "po_numbers": "PO", "sipl": "SIPL",
         "port_eta": "Port ETA", "arrival_status": "Arrival Status",
         "pending_bills_display": "Pending Bills", "vendor_to_follow_up": "Vendor to Follow Up",
+        "destination": "Delivery Location", "sipl_status": "SIPL Status",
     })
-    pending_cols = ["Container", "PO", "SIPL", "Port ETA", "Arrival Status",
-                    "Pending Bills", "Vendor to Follow Up", "Days Until Arrival"]
+    pending_cols = ["Container", "Delivery Location", "SIPL Status", "PO", "SIPL", "Port ETA",
+                    "Arrival Status", "Pending Bills", "Vendor to Follow Up", "Days Until Arrival"]
     pending_df = pending_df[[c for c in pending_cols if c in pending_df.columns]]
 
     # --- Compliance KPI -------------------------------------------------------

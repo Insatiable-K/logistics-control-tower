@@ -475,6 +475,7 @@ for _, sipl_row in sipl_master.iterrows():
         "po_numbers": sipl_row.get("po_numbers", ""),
         "freight_forwarder": sipl_row.get("freight_forwarder"),
         "destination": sipl_row.get("ship_to_location"),
+        "sipl_status": sipl_row.get("sipl_status", "Unknown"),
         "port_eta": sipl_row.get("port_eta"),
         "location_eta": sipl_row.get("location_eta"),
         "days_to_port_eta": sipl_row.get("days_to_port_eta"),
